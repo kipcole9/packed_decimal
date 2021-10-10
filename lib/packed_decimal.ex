@@ -117,11 +117,7 @@ defmodule PackedDecimal do
   @exp_bits quote(do: signed-integer-unquote(exp_bits))
   @coef_bits quote(do: integer-unquote(coef_bits))
 
-  # Small decimal is packed into a 60 bit integer
-  defmacrop packed_decimal do
-    exp_bits = unquote(exp_bits)
-    coef_bits = unquote(coef_bits)
-
+  defp packed_decimal(exp_bits, coef_bits) do
     quote do
       %PackedDecimal{packed_decimal:
         <<
@@ -133,6 +129,24 @@ defmodule PackedDecimal do
         >>
       }
     end
+  end
+
+  defmacrop packed_decimal do
+    exp_bits = unquote(exp_bits)
+    coef_bits = unquote(coef_bits)
+    packed_decimal(exp_bits, coef_bits)
+  end
+
+  defmacro packed_decimal(n) do
+    ast = packed_decimal(unquote(exp_bits), unquote(coef_bits))
+
+    Macro.prewalk(ast, fn
+      {:var!, meta, [{varname, [], module}]} ->
+        varname = String.to_atom("#{varname}#{n}")
+        {:var!, meta, [{varname, [], module}]}
+      other ->
+        other
+    end)
   end
 
   defmacrop pack(sign, nan, inf, exp, coef) do
@@ -150,13 +164,13 @@ defmodule PackedDecimal do
     end
   end
 
-  defmacrop nan do
+  defmacrop nan(sign \\ 1) do
     exp_bits = unquote(exp_bits)
     coef_bits = unquote(coef_bits)
 
     quote do
       <<
-        1::integer-1,
+        unquote(sign)::integer-1,
         1::integer-1,
         0::integer-1,
         0::signed-integer-unquote(exp_bits),
@@ -165,13 +179,13 @@ defmodule PackedDecimal do
     end
   end
 
-  defmacrop infinity do
+  defmacrop infinity(sign \\ 1) do
     exp_bits = unquote(exp_bits)
     coef_bits = unquote(coef_bits)
 
     quote do
       <<
-        1::integer-1,
+        unquote(sign)::integer-1,
         0::integer-1,
         1::integer-1,
         0::signed-integer-unquote(exp_bits),
@@ -187,8 +201,8 @@ defmodule PackedDecimal do
   # exponent as well but we will need to check the precision
   # to ensure we aren't dropping digits.
 
-  @min_int -1 * trunc(:math.pow(2, coef_bits) - 1) |> IO.inspect(label: "min_coef")
-  @max_int trunc(:math.pow(2, coef_bits) - 1) |> IO.inspect(label: "max_coef")
+  @min_int -1 * trunc(:math.pow(2, coef_bits) - 1)
+  @max_int trunc(:math.pow(2, coef_bits) - 1)
 
   # The compiler will optimize these steps out
   # but they are required to silence the unused
@@ -199,6 +213,23 @@ defmodule PackedDecimal do
     quote do
     _ = var!(sign); _ = var!(nan); _ = var!(inf); _ = var!(exp); _ = var!(coef)
     end
+  end
+
+  defmacrop silence_unused(n) do
+    module = __MODULE__
+    context = [context: module, import: Kernel]
+    vars = ["sign", "nan", "inf", "exp", "coef"]
+
+    quoted =
+      Enum.map(vars, fn var ->
+        {:=, [],
+         [
+           {:_, [], module},
+           {:var!, context, [{String.to_atom("#{var}#{n}"), [], module}]}
+        ]}
+      end)
+
+    {:__block__, [], quoted}
   end
 
   defmacrop error(flags, reason, result, context \\ nil) do
@@ -293,263 +324,283 @@ defmodule PackedDecimal do
     decimal_2
   end
 
-  # def add(%Decimal{coef: :inf, sign: sign} = num1, %Decimal{coef: :inf, sign: sign} = num2) do
-  #   if num1.exp > num2.exp do
-  #     num1
-  #   else
-  #     num2
-  #   end
-  # end
-  #
-  # def add(%Decimal{coef: :inf}, %Decimal{coef: :inf}),
-  #   do: error(:invalid_operation, "adding +Infinity and -Infinity", %Decimal{coef: :NaN})
-  #
-  # def add(%Decimal{coef: :inf} = num1, %Decimal{}), do: num1
-  #
-  # def add(%Decimal{}, %Decimal{coef: :inf} = num2), do: num2
-  #
-  # def add(%Decimal{} = num1, %Decimal{} = num2) do
-  #   %Decimal{sign: sign1, coef: coef1, exp: exp1} = num1
-  #   %Decimal{sign: sign2, coef: coef2, exp: exp2} = num2
-  #
-  #   {coef1, coef2} = add_align(coef1, exp1, coef2, exp2)
-  #   coef = sign1 * coef1 + sign2 * coef2
-  #   exp = Kernel.min(exp1, exp2)
-  #   sign = add_sign(sign1, sign2, coef)
-  #   context(%Decimal{sign: sign, coef: Kernel.abs(coef), exp: exp})
-  # end
-  #
-  # def add(num1, num2), do: add(decimal(num1), decimal(num2))
+  def add(packed_decimal(1) = num1, packed_decimal(2) = num2)
+      when inf1 == 1 and inf2 == 1 and sign1 == sign2 do
+    silence_unused(1); silence_unused(2)
 
-#   @doc """
-#   Subtracts second number from the first. Equivalent to `Decimal.add/2` when the
-#   second number's sign is negated.
-#
-#   ## Exceptional conditions
-#
-#     * If one number is -Infinity and the other +Infinity `:invalid_operation` will
-#       be signalled.
-#
-#   ## Examples
-#
-#       iex> Decimal.sub(1, "0.1")
-#       #Decimal<0.9>
-#
-#       iex> Decimal.sub(1, "Inf")
-#       #Decimal<-Infinity>
-#
-#   """
-#   @spec sub(decimal, decimal) :: t
-#   def sub(%Decimal{} = num1, %Decimal{sign: sign} = num2) do
-#     add(num1, %{num2 | sign: -sign})
-#   end
-#
-#   def sub(num1, num2) do
-#     sub(decimal(num1), decimal(num2))
-#   end
-#
-#   @doc """
-#   Compares two numbers numerically. If the first number is greater than the second
-#   `:gt` is returned, if less than `:lt` is returned, if both numbers are equal
-#   `:eq` is returned.
-#
-#   Neither number can be a NaN.
-#
-#   ## Examples
-#
-#       iex> Decimal.compare("1.0", 1)
-#       :eq
-#
-#       iex> Decimal.compare("Inf", -1)
-#       :gt
-#
-#   """
-#   @spec compare(decimal, decimal) :: :lt | :gt | :eq
-#   def compare(%Decimal{coef: :inf, sign: sign}, %Decimal{coef: :inf, sign: sign}),
-#     do: :eq
-#
-#   def compare(%Decimal{coef: :inf, sign: sign1}, %Decimal{coef: :inf, sign: sign2})
-#       when sign1 < sign2,
-#       do: :lt
-#
-#   def compare(%Decimal{coef: :inf, sign: sign1}, %Decimal{coef: :inf, sign: sign2})
-#       when sign1 > sign2,
-#       do: :gt
-#
-#   def compare(%Decimal{coef: :inf, sign: 1}, _num2), do: :gt
-#   def compare(%Decimal{coef: :inf, sign: -1}, _num2), do: :lt
-#
-#   def compare(_num1, %Decimal{coef: :inf, sign: 1}), do: :lt
-#   def compare(_num1, %Decimal{coef: :inf, sign: -1}), do: :gt
-#
-#   def compare(%Decimal{coef: :NaN} = num1, _num2),
-#     do: error(:invalid_operation, "operation on NaN", num1)
-#
-#   def compare(_num1, %Decimal{coef: :NaN} = num2),
-#     do: error(:invalid_operation, "operation on NaN", num2)
-#
-#   def compare(%Decimal{} = num1, %Decimal{} = num2) do
-#     case sub(num1, num2) do
-#       %Decimal{coef: 0} -> :eq
-#       %Decimal{sign: 1} -> :gt
-#       %Decimal{sign: -1} -> :lt
-#     end
-#   end
-#
-#   def compare(num1, num2) do
-#     compare(decimal(num1), decimal(num2))
-#   end
-#
-#   @deprecated "Use compare/2 instead"
-#   @spec cmp(decimal, decimal) :: :lt | :eq | :gt
-#   def cmp(num1, num2) do
-#     compare(num1, num2)
-#   end
-#
-#   @doc """
-#   Compares two numbers numerically and returns `true` if they are equal,
-#   otherwise `false`. If one of the operands is a quiet NaN this operation
-#   will always return `false`.
-#
-#   ## Examples
-#
-#       iex> Decimal.equal?("1.0", 1)
-#       true
-#
-#       iex> Decimal.equal?(1, -1)
-#       false
-#
-#   """
-#   @spec equal?(decimal, decimal) :: boolean
-#   def equal?(num1, num2) do
-#     eq?(num1, num2)
-#   end
-#
-#   @doc """
-#   Compares two numbers numerically and returns `true` if they are equal,
-#   otherwise `false`. If one of the operands is a quiet NaN this operation
-#   will always return `false`.
-#
-#   ## Examples
-#
-#       iex> Decimal.eq?("1.0", 1)
-#       true
-#
-#       iex> Decimal.eq?(1, -1)
-#       false
-#
-#   """
-#
-#   @spec eq?(decimal, decimal) :: boolean
-#   def eq?(%Decimal{coef: :NaN}, _num2), do: false
-#   def eq?(_num1, %Decimal{coef: :NaN}), do: false
-#   def eq?(num1, num2), do: compare(num1, num2) == :eq
-#
-#   @doc """
-#   Compares two numbers numerically and returns `true` if the the first argument
-#   is greater than the second, otherwise `false`. If one the operands is a
-#   quiet NaN this operation will always return `false`.
-#
-#   ## Examples
-#
-#       iex> Decimal.gt?("1.3", "1.2")
-#       true
-#
-#       iex> Decimal.gt?("1.2", "1.3")
-#       false
-#
-#   """
-#
-#   @spec gt?(decimal, decimal) :: boolean
-#   def gt?(%Decimal{coef: :NaN}, _num2), do: false
-#   def gt?(_num1, %Decimal{coef: :NaN}), do: false
-#   def gt?(num1, num2), do: compare(num1, num2) == :gt
-#
-#   @doc """
-#   Compares two numbers numerically and returns `true` if the the first number is
-#   less than the second number, otherwise `false`. If one of the operands is a
-#   quiet NaN this operation will always return `false`.
-#
-#   ## Examples
-#
-#       iex> Decimal.lt?("1.1", "1.2")
-#       true
-#
-#       iex> Decimal.lt?("1.4", "1.2")
-#       false
-#
-#   """
-#
-#   @spec lt?(decimal, decimal) :: boolean
-#   def lt?(%Decimal{coef: :NaN}, _num2), do: false
-#   def lt?(_num1, %Decimal{coef: :NaN}), do: false
-#   def lt?(num1, num2), do: compare(num1, num2) == :lt
-#
-#   @doc """
-#   Divides two numbers.
-#
-#   ## Exceptional conditions
-#
-#     * If both numbers are ±Infinity `:invalid_operation` is signalled.
-#     * If both numbers are ±0 `:invalid_operation` is signalled.
-#     * If second number (denominator) is ±0 `:division_by_zero` is signalled.
-#
-#   ## Examples
-#
-#       iex> Decimal.div(3, 4)
-#       #Decimal<0.75>
-#
-#       iex> Decimal.div("Inf", -1)
-#       #Decimal<-Infinity>
-#
-#   """
-#   @spec div(decimal, decimal) :: t
-#   def div(%Decimal{coef: :NaN} = num1, %Decimal{}), do: num1
-#
-#   def div(%Decimal{}, %Decimal{coef: :NaN} = num2), do: num2
-#
-#   def div(%Decimal{coef: :inf}, %Decimal{coef: :inf}),
-#     do: error(:invalid_operation, "±Infinity / ±Infinity", %Decimal{coef: :NaN})
-#
-#   def div(%Decimal{sign: sign1, coef: :inf} = num1, %Decimal{sign: sign2}) do
-#     sign = if sign1 == sign2, do: 1, else: -1
-#     %{num1 | sign: sign}
-#   end
-#
-#   def div(%Decimal{sign: sign1, exp: exp1}, %Decimal{sign: sign2, coef: :inf, exp: exp2}) do
-#     sign = if sign1 == sign2, do: 1, else: -1
-#     # TODO: Subnormal
-#     # exponent?
-#     %Decimal{sign: sign, coef: 0, exp: exp1 - exp2}
-#   end
-#
-#   def div(%Decimal{coef: 0}, %Decimal{coef: 0}),
-#     do: error(:invalid_operation, "0 / 0", %Decimal{coef: :NaN})
-#
-#   def div(%Decimal{sign: sign1}, %Decimal{sign: sign2, coef: 0}) do
-#     sign = if sign1 == sign2, do: 1, else: -1
-#     error(:division_by_zero, nil, %Decimal{sign: sign, coef: :inf})
-#   end
-#
-#   def div(%Decimal{} = num1, %Decimal{} = num2) do
-#     %Decimal{sign: sign1, coef: coef1, exp: exp1} = num1
-#     %Decimal{sign: sign2, coef: coef2, exp: exp2} = num2
-#     sign = if sign1 == sign2, do: 1, else: -1
-#
-#     if coef1 == 0 do
-#       context(%Decimal{sign: sign, coef: 0, exp: exp1 - exp2}, [])
-#     else
-#       prec10 = pow10(Context.get().precision)
-#       {coef1, coef2, adjust} = div_adjust(coef1, coef2, 0)
-#       {coef, adjust, _rem, signals} = div_calc(coef1, coef2, 0, adjust, prec10)
-#
-#       context(%Decimal{sign: sign, coef: coef, exp: exp1 - exp2 - adjust}, signals)
-#     end
-#   end
-#
-#   def div(num1, num2) do
-#     div(decimal(num1), decimal(num2))
-#   end
+    if exp1 > exp2 do
+      num1
+    else
+      num2
+    end
+  end
+
+  def add(packed_decimal(1), packed_decimal(2)) when inf1 == 1 and inf2 == 1 do
+    silence_unused(1); silence_unused(2)
+    error(:invalid_operation, "adding +Infinity and -Infinity", nan())
+  end
+
+  def add(packed_decimal(1) = num1, packed_decimal(2)) when inf1 == 1 do
+    silence_unused(1); silence_unused(2)
+    num1
+  end
+
+  def add(packed_decimal(1) = num1, packed_decimal(2)) when inf2 == 1 do
+    silence_unused(1); silence_unused(2)
+    num1
+  end
+
+  def add(packed_decimal(1), packed_decimal(2)) do
+    silence_unused(1); silence_unused(2)
+    sign1 = if sign1 <= 0, do: -1, else: 1
+    sign2 = if sign2 <= 0, do: -1, else: 1
+
+    {coef1, coef2} = add_align(coef1, exp1, coef2, exp2)
+    coef = sign1 * coef1 + sign2 * coef2
+    exp = Kernel.min(exp1, exp2)
+    sign = add_sign(sign1, sign2, coef)
+    context(new(sign, _nan = 0, _inf = 0, exp, Kernel.abs(coef)))
+  end
+
+  def add(num1, num2), do: add(decimal(num1), decimal(num2))
+
+  @doc """
+  Subtracts second number from the first. Equivalent to `Decimal.add/2` when the
+  second number's sign is negated.
+
+  ## Exceptional conditions
+
+    * If one number is -Infinity and the other +Infinity `:invalid_operation` will
+      be signalled.
+
+  ## Examples
+
+      iex> PackedDecimal.sub(1, "0.1")
+      #Decimal<0.9>
+
+      iex> PackedDecimal.sub(1, "Inf")
+      #Decimal<-Infinity>
+
+  """
+  @spec sub(decimal, decimal) :: t
+  def sub(packed_decimal(1) = num1, packed_decimal(2) = num2) do
+    silence_unused(1); silence_unused(2)
+    add(num1, put_sign(num2, -1))
+  end
+
+  def sub(num1, num2) do
+    sub(decimal(num1), decimal(num2))
+  end
+
+  @doc """
+  Compares two numbers numerically. If the first number is greater than the second
+  `:gt` is returned, if less than `:lt` is returned, if both numbers are equal
+  `:eq` is returned.
+
+  Neither number can be a NaN.
+
+  ## Examples
+
+      iex> PackedDecimal.compare("1.0", 1)
+      :eq
+
+      iex> PackedDecimal.compare("Inf", -1)
+      :gt
+
+  """
+  @spec compare(decimal, decimal) :: :lt | :gt | :eq
+  def compare(packed_decimal(1), packed_decimal(2))
+      when inf1 == 1 and inf2 == 1 and sign1 == sign2,
+    do: (silence_unused(1); silence_unused(2); :eq)
+
+  def compare(packed_decimal(1), packed_decimal(2))
+      when inf1 == 1 and inf2 == 1 and sign1 < sign2,
+    do: (silence_unused(1); silence_unused(2); :lt)
+
+  def compare(packed_decimal(1), packed_decimal(2))
+      when inf1 == 1 and inf2 == 1 and sign1 > sign2,
+    do: (silence_unused(1); silence_unused(2); :gt)
+
+  def compare(packed_decimal(1), _num2) when inf1 == 1 and sign1 == 1,
+    do: (silence_unused(1); :gt)
+  def compare(packed_decimal(1), _num2) when inf1 == 1 and sign1 == 0,
+    do: (silence_unused(1); :lt)
+
+  def compare(_num1, packed_decimal(2)) when inf2 == 1 and sign2 == 1,
+    do: (silence_unused(2); :lt)
+  def compare(_num1, packed_decimal(2)) when inf2 == 1 and sign2 == 0,
+    do: (silence_unused(2); :gt)
+
+  def compare(packed_decimal(1) = num1, _num2) when nan1 == 1,
+    do: (silence_unused(1); error(:invalid_operation, "operation on NaN", num1))
+
+  def compare(_num1, packed_decimal(2) = num2) when nan2 == 1,
+    do: (silence_unused(2); error(:invalid_operation, "operation on NaN", num2))
+
+  def compare(packed_decimal(1) = num1, packed_decimal(2) = num2) do
+    silence_unused(1); silence_unused(2)
+
+    case sub(num1, num2) do
+      packed_decimal() when coef == 0 -> silence_unused(); :eq
+      packed_decimal() when sign == 1 -> silence_unused(); :gt
+      packed_decimal() when sign == 0 -> silence_unused(); :gt
+    end
+  end
+
+  def compare(num1, num2) do
+    compare(decimal(num1), decimal(num2))
+  end
+
+  @deprecated "Use compare/2 instead"
+  @spec cmp(decimal, decimal) :: :lt | :eq | :gt
+  def cmp(num1, num2) do
+    compare(num1, num2)
+  end
+
+  @doc """
+  Compares two numbers numerically and returns `true` if they are equal,
+  otherwise `false`. If one of the operands is a quiet NaN this operation
+  will always return `false`.
+
+  ## Examples
+
+      iex> PackedDecimal.equal?("1.0", 1)
+      true
+
+      iex> PackedDecimal.equal?(1, -1)
+      false
+
+  """
+  @spec equal?(decimal, decimal) :: boolean
+  def equal?(num1, num2) do
+    eq?(num1, num2)
+  end
+
+  @doc """
+  Compares two numbers numerically and returns `true` if they are equal,
+  otherwise `false`. If one of the operands is a quiet NaN this operation
+  will always return `false`.
+
+  ## Examples
+
+      iex> PackedDecimal.eq?("1.0", 1)
+      true
+
+      iex> PackedDecimal.eq?(1, -1)
+      false
+
+  """
+
+  @spec eq?(decimal, decimal) :: boolean
+  def eq?(packed_decimal(), _num2) when nan == 1, do: (silence_unused(); false)
+  def eq?(_num1, packed_decimal()) when nan == 1, do: (silence_unused(); false)
+  def eq?(num1, num2), do: compare(num1, num2) == :eq
+
+  @doc """
+  Compares two numbers numerically and returns `true` if the the first argument
+  is greater than the second, otherwise `false`. If one the operands is a
+  quiet NaN this operation will always return `false`.
+
+  ## Examples
+
+      iex> PackedDecimal.gt?("1.3", "1.2")
+      true
+
+      iex> PackedDecimal.gt?("1.2", "1.3")
+      false
+
+  """
+
+  @spec gt?(decimal, decimal) :: boolean
+  def gt?(packed_decimal(), _num2) when nan == 1, do: (silence_unused(); false)
+  def gt?(_num1, packed_decimal()) when nan == 1, do: (silence_unused(); false)
+  def gt?(num1, num2), do: compare(num1, num2) == :gt
+
+  @doc """
+  Compares two numbers numerically and returns `true` if the the first number is
+  less than the second number, otherwise `false`. If one of the operands is a
+  quiet NaN this operation will always return `false`.
+
+  ## Examples
+
+      iex> PackedDecimal.lt?("1.1", "1.2")
+      true
+
+      iex> PackedDecimal.lt?("1.4", "1.2")
+      false
+
+  """
+
+  @spec lt?(decimal, decimal) :: boolean
+  def lt?(packed_decimal(), _num2) when nan == 1, do: (silence_unused(); false)
+  def lt?(_num1, packed_decimal()) when nan == 1, do: (silence_unused(); false)
+  def lt?(num1, num2), do: compare(num1, num2) == :lt
+
+  @doc """
+  Divides two numbers.
+
+  ## Exceptional conditions
+
+    * If both numbers are ±Infinity `:invalid_operation` is signalled.
+    * If both numbers are ±0 `:invalid_operation` is signalled.
+    * If second number (denominator) is ±0 `:division_by_zero` is signalled.
+
+  ## Examples
+
+      iex> Decimal.div(3, 4)
+      #Decimal<0.75>
+
+      iex> Decimal.div("Inf", -1)
+      #Decimal<-Infinity>
+
+  """
+  @spec div(decimal, decimal) :: t
+  def div(%Decimal{coef: :NaN} = num1, %Decimal{}), do: num1
+
+  def div(%Decimal{}, %Decimal{coef: :NaN} = num2), do: num2
+
+  def div(%Decimal{coef: :inf}, %Decimal{coef: :inf}),
+    do: error(:invalid_operation, "±Infinity / ±Infinity", %Decimal{coef: :NaN})
+
+  def div(%Decimal{sign: sign1, coef: :inf} = num1, %Decimal{sign: sign2}) do
+    sign = if sign1 == sign2, do: 1, else: -1
+    %{num1 | sign: sign}
+  end
+
+  def div(%Decimal{sign: sign1, exp: exp1}, %Decimal{sign: sign2, coef: :inf, exp: exp2}) do
+    sign = if sign1 == sign2, do: 1, else: -1
+    # TODO: Subnormal
+    # exponent?
+    %Decimal{sign: sign, coef: 0, exp: exp1 - exp2}
+  end
+
+  def div(%Decimal{coef: 0}, %Decimal{coef: 0}),
+    do: error(:invalid_operation, "0 / 0", %Decimal{coef: :NaN})
+
+  def div(%Decimal{sign: sign1}, %Decimal{sign: sign2, coef: 0}) do
+    sign = if sign1 == sign2, do: 1, else: -1
+    error(:division_by_zero, nil, %Decimal{sign: sign, coef: :inf})
+  end
+
+  def div(%Decimal{} = num1, %Decimal{} = num2) do
+    %Decimal{sign: sign1, coef: coef1, exp: exp1} = num1
+    %Decimal{sign: sign2, coef: coef2, exp: exp2} = num2
+    sign = if sign1 == sign2, do: 1, else: -1
+
+    if coef1 == 0 do
+      context(%Decimal{sign: sign, coef: 0, exp: exp1 - exp2}, [])
+    else
+      prec10 = pow10(Context.get().precision)
+      {coef1, coef2, adjust} = div_adjust(coef1, coef2, 0)
+      {coef, adjust, _rem, signals} = div_calc(coef1, coef2, 0, adjust, prec10)
+
+      context(%Decimal{sign: sign, coef: coef, exp: exp1 - exp2 - adjust}, signals)
+    end
+  end
+
+  def div(num1, num2) do
+    div(decimal(num1), decimal(num2))
+  end
 #
 #   @doc """
 #   Divides two numbers and returns the integer part.
@@ -971,23 +1022,30 @@ defmodule PackedDecimal do
 
   ## Examples
 
-      iex> Decimal.normalize(Decimal.new("1.00"))
+      iex> PackedDecimal.normalize(Decimal.new("1.00"))
       #Decimal<1>
 
-      iex> Decimal.normalize(Decimal.new("1.01"))
+      iex> PackedDecimal.normalize(Decimal.new("1.01"))
       #Decimal<1.01>
 
   """
 
   @spec normalize(t) :: t
-  def normalize(packed_decimal() = num) when nan == 1, do: num
+  def normalize(packed_decimal() = num) when nan == 1 do
+    silence_unused()
+    num
+  end
 
-  def normalize(packed_decimal() = num) when inf == 1 do
+  def normalize(packed_decimal()) when inf == 1 do
+    silence_unused()
+
     # exponent?
     new(sign, nan, inf, _exp = 0, coef)
   end
 
   def normalize(packed_decimal()) do
+    silence_unused()
+
     if coef == 0 do
       new(sign, nan, inf, _exp = 0, _coef = 0)
     else
@@ -1006,22 +1064,30 @@ defmodule PackedDecimal do
 
   ## Examples
 
-      iex> Decimal.round("1.234")
+      iex> PackedDecimal.round("1.234")
       #Decimal<1>
 
-      iex> Decimal.round("1.234", 1)
+      iex> PackedDecimal.round("1.234", 1)
       #Decimal<1.2>
 
   """
   @spec round(decimal, integer, rounding) :: t
   def round(num, places \\ 0, mode \\ :half_up)
 
-  def round(packed_decimal() = num, _, _) when nan == 1, do: num
+  def round(packed_decimal() = num, _, _) when nan == 1 do
+    silence_unused()
+    num
+  end
 
-  def round(packed_decimal() = num, _, _) when inf == 1, do: num
+  def round(packed_decimal() = num, _, _) when inf == 1 do
+    silence_unused()
+    num
+  end
 
   def round(packed_decimal() = num, n, mode) do
+    silence_unused()
     packed_decimal() = normalize(num)
+    silence_unused()
     digits = :erlang.integer_to_list(coef)
     target_exp = -n
     value = do_round(sign, digits, exp, target_exp, mode)
@@ -1037,25 +1103,34 @@ defmodule PackedDecimal do
 
   ## Examples
 
-      iex> Decimal.sqrt("100")
+      iex> PackedDecimal.sqrt("100")
       #Decimal<10>
 
   """
 
   @spec sqrt(decimal) :: t
-  def sqrt(packed_decimal() = num) when nan == 1,
-    do: error(:invalid_operation, "operation on NaN", num)
+  def sqrt(packed_decimal() = num) when nan == 1 do
+    silence_unused()
+    error(:invalid_operation, "operation on NaN", num)
+  end
 
-  def sqrt(packed_decimal() = num) when exp == 1,
-    do: new(sign, nan, inf, exp >>> 1, coef)
+  def sqrt(packed_decimal()) when exp == 1 do
+    silence_unused()
+    new(sign, nan, inf, exp >>> 1, coef)
+  end
 
-  def sqrt(packed_decimal() = num) when sign == 0,
-    do: error(:invalid_operation, "less than zero", num)
+  def sqrt(packed_decimal() = num) when sign == 0 do
+    silence_unused()
+    error(:invalid_operation, "less than zero", num)
+  end
 
-  def sqrt(packed_decimal() = num) when inf == 1,
-    do: num
+  def sqrt(packed_decimal() = num) when inf == 1 do
+    silence_unused()
+    num
+  end
 
   def sqrt(packed_decimal()) do
+    silence_unused()
     precision = Context.get().precision + 1
     digits = :erlang.integer_to_list(coef)
     num_digits = length(digits)
@@ -1110,11 +1185,11 @@ defmodule PackedDecimal do
           do: Kernel.div(root, pow10(shift)),
           else: root * pow10(-shift)
 
-      context(new(_sign = 1, nan = 0, inf = 0, exp, coef))
+      context(new(_sign = 1, _nan = 0, _inf = 0, exp, coef))
     else
       # otherwise the calculated root is inexact (but still meets precision),
       # so use the root as `coef` and get the final exponent by shifting `exp`
-      context(new(_sign = 1, nan = 0, inf = 0, exp - shift, _coef = root))
+      context(new(_sign = 1, _nan = 0, _inf = 0, exp - shift, _coef = root))
     end
   end
 
@@ -1154,10 +1229,10 @@ defmodule PackedDecimal do
 
   ## Examples
 
-      iex> Decimal.new(1)
+      iex> PackedDecimal.new(1)
       #Decimal<1>
 
-      iex> Decimal.new("3.14")
+      iex> PackedDecimal.new("3.14")
       #Decimal<3.14>
 
   """
@@ -1178,16 +1253,16 @@ defmodule PackedDecimal do
     end
   end
 
-  @doc false
-  def new(sign, nan, inf, exp, coef) do
-    %__MODULE__{packed_decimal: pack(sign, nan, inf, exp, coef)}
-  end
-
   def new(binary) when is_binary(binary) do
     case parse(binary) do
       {packed_decimal, ""} -> packed_decimal
       _ -> raise Error, reason: "number parsing syntax: #{inspect(binary)}"
     end
+  end
+
+  @doc false
+  def new(sign, nan, inf, exp, coef) do
+    %__MODULE__{packed_decimal: pack(sign, nan, inf, exp, coef)}
   end
 
   @doc """
@@ -1203,12 +1278,12 @@ defmodule PackedDecimal do
     new(sign, _nan = 0, _inf = 0, exp, coef)
   end
 
-  def new(sign, :NaN, exp) do
-    nan()
+  def new(sign, :NaN, _exp) do
+    nan(sign)
   end
 
-  def new(sign, :inf, exp) do
-    infinity()
+  def new(sign, :inf, _exp) do
+    infinity(sign)
   end
 
   @doc """
@@ -1225,14 +1300,14 @@ defmodule PackedDecimal do
       iex> Enum.reduce([0.1, 0.1, 0.1], &+/2)
       0.30000000000000004
 
-      iex> Enum.reduce([Decimal.new("0.1"), Decimal.new("0.1"), Decimal.new("0.1")], &Decimal.add/2)
+      iex> Enum.reduce([PackedDecimal.new("0.1"), PackedDecimal.new("0.1"), PackedDecimal.new("0.1")], &PackedDecimal.add/2)
       #Decimal<0.3>
 
   For this reason, it's recommended to build decimals with `new/1`, which is always precise, instead.
 
   ## Examples
 
-      iex> Decimal.from_float(3.14)
+      iex> PackedDecimal.from_float(3.14)
       #Decimal<3.14>
 
   """
@@ -1265,7 +1340,7 @@ defmodule PackedDecimal do
   """
   @spec cast(term) :: {:ok, t} | :error
   def cast(integer) when is_integer(integer), do: {:ok, new(integer)}
-  def cast(packed_decimal() = packed_decimal), do: {:ok, packed_decimal}
+  def cast(packed_decimal() = packed_decimal), do: (silence_unused(); {:ok, packed_decimal})
   def cast(float) when is_float(float), do: {:ok, from_float(float)}
 
   def cast(binary) when is_binary(binary) do
@@ -1285,16 +1360,16 @@ defmodule PackedDecimal do
 
   ## Examples
 
-      iex> Decimal.parse("3.14")
-      {%Decimal{coef: 314, exp: -2, sign: 1}, ""}
+      iex> PackedDecimal.parse("3.14")
+      {%PackedDecimal{coef: 314, exp: -2, sign: 1}, ""}
 
       iex> Decimal.parse("3.14.15")
-      {%Decimal{coef: 314, exp: -2, sign: 1}, ".15"}
+      {%PackedDecimal{coef: 314, exp: -2, sign: 1}, ".15"}
 
       iex> Decimal.parse("-1.1e3")
-      {%Decimal{coef: 11, exp: 2, sign: -1}, ""}
+      {%PackedDecimal{coef: 11, exp: 2, sign: -1}, ""}
 
-      iex> Decimal.parse("bad")
+      iex> PackedDecimal.parse("bad")
       :error
 
   """
@@ -1439,6 +1514,7 @@ defmodule PackedDecimal do
   end
 
   def to_integer(packed_decimal() = decimal) when is_integer(coef) do
+    silence_unused()
     raise ArgumentError,
           "cannot convert #{inspect(decimal)} without losing precision. Use Decimal.round/3 first."
   end
