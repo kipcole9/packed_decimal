@@ -25,6 +25,8 @@ defmodule PackedDecimal.Mixfile do
   defp deps() do
     [
       {:ex_doc, ">= 0.0.0", only: :dev, runtime: false}
+      {:decimal, "~> 2.0", optional: true},
+      {:benchee, "~> 1.0"}
     ]
   end
 
