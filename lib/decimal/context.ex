@@ -73,7 +73,9 @@ defmodule Decimal.Context do
           traps: [Decimal.signal()]
         }
 
-  defstruct precision: 28,
+  # Since we are packing a decimal into an integer we
+  # limit the available precision to 8 decimal digits
+  defstruct precision: 8,
             rounding: :half_up,
             flags: [],
             traps: [:invalid_operation, :division_by_zero]
@@ -83,7 +85,7 @@ defmodule Decimal.Context do
   @doc """
   Runs function with given context.
   """
-  doc_since("1.9.0")
+
   @spec with(t(), (() -> x)) :: x when x: var
   def with(%Context{} = context, fun) when is_function(fun, 0) do
     old = Process.put(@context_key, context)
@@ -98,7 +100,7 @@ defmodule Decimal.Context do
   @doc """
   Gets the process' context.
   """
-  doc_since("1.9.0")
+
   @spec get() :: t()
   def get() do
     Process.get(@context_key, %Context{})
@@ -107,7 +109,7 @@ defmodule Decimal.Context do
   @doc """
   Set the process' context.
   """
-  doc_since("1.9.0")
+
   @spec set(t()) :: :ok
   def set(%Context{} = context) do
     Process.put(@context_key, context)
@@ -117,7 +119,7 @@ defmodule Decimal.Context do
   @doc """
   Update the process' context.
   """
-  doc_since("1.9.0")
+
   @spec update((t() -> t())) :: :ok
   def update(fun) when is_function(fun, 1) do
     get() |> fun.() |> set()

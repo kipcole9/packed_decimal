@@ -44,7 +44,6 @@ defmodule Decimal do
 
   import Bitwise
   import Kernel, except: [abs: 1, div: 2, max: 2, min: 2, rem: 2, round: 1]
-  import Decimal.Macros
   alias Decimal.Context
   alias Decimal.Error
 
@@ -98,18 +97,17 @@ defmodule Decimal do
 
     * `coef` - the coefficient of the power of `10`.
     * `exp` - the exponent of the power of `10`.
-    * `sign` - `1` for positive, `-1` for negative.
+    * `sign` - `1` for positive, `0` for negative.
 
   """
-  @type t :: %__MODULE__{
-          sign: sign,
-          coef: coefficient,
-          exp: exponent
-        }
+  @type t ::  bitstring()
 
   @type decimal :: t | integer | String.t()
 
-  defstruct sign: 1, coef: 0, exp: 0
+  # Small decimal is packed into a 60 bit integer
+  small_decimal = quote do
+    << sign::1, nan::1, inf::1, exp::signed-integer-10, coef::integer-47 >>
+  end
 
   defmacrop error(flags, reason, result, context \\ nil) do
     quote bind_quoted: binding() do
@@ -147,7 +145,7 @@ defmodule Decimal do
 
   Allowed in guard tests on OTP 21+.
   """
-  doc_since("1.9.0")
+
   defmacro is_decimal(term)
 
   if function_exported?(:erlang, :is_map_key, 2) do
@@ -360,7 +358,7 @@ defmodule Decimal do
       false
 
   """
-  doc_since("1.8.0")
+
   @spec eq?(decimal, decimal) :: boolean
   def eq?(%Decimal{coef: :NaN}, _num2), do: false
   def eq?(_num1, %Decimal{coef: :NaN}), do: false
@@ -380,7 +378,7 @@ defmodule Decimal do
       false
 
   """
-  doc_since("1.8.0")
+
   @spec gt?(decimal, decimal) :: boolean
   def gt?(%Decimal{coef: :NaN}, _num2), do: false
   def gt?(_num1, %Decimal{coef: :NaN}), do: false
@@ -400,7 +398,7 @@ defmodule Decimal do
       false
 
   """
-  doc_since("1.8.0")
+
   @spec lt?(decimal, decimal) :: boolean
   def lt?(%Decimal{coef: :NaN}, _num2), do: false
   def lt?(_num1, %Decimal{coef: :NaN}), do: false
@@ -802,7 +800,7 @@ defmodule Decimal do
       #Decimal<Infinity>
 
   """
-  doc_since("1.9.0")
+
   @spec negate(decimal) :: t
   def negate(%Decimal{coef: :NaN} = num), do: num
   def negate(%Decimal{sign: sign} = num), do: context(%{num | sign: -sign})
@@ -811,14 +809,14 @@ defmodule Decimal do
   @doc """
   Applies the context to the given number rounding it to specified precision.
   """
-  doc_since("1.9.0")
+
   @spec apply_context(t) :: t
   def apply_context(%Decimal{} = num), do: context(num)
 
   @doc """
   Check if given number is positive
   """
-  doc_since("1.5.0")
+
   @spec positive?(t) :: boolean
   def positive?(%Decimal{coef: :NaN}), do: false
   def positive?(%Decimal{coef: 0}), do: false
@@ -828,7 +826,7 @@ defmodule Decimal do
   @doc """
   Check if given number is negative
   """
-  doc_since("1.5.0")
+
   @spec negative?(t) :: boolean
   def negative?(%Decimal{coef: :NaN}), do: false
   def negative?(%Decimal{coef: 0}), do: false
@@ -899,7 +897,7 @@ defmodule Decimal do
       #Decimal<1.01>
 
   """
-  doc_since("1.9.0")
+
   @spec normalize(t) :: t
   def normalize(%Decimal{coef: :NaN} = num), do: num
 
@@ -960,7 +958,7 @@ defmodule Decimal do
       #Decimal<10>
 
   """
-  doc_since("1.7.0")
+
   @spec sqrt(decimal) :: t
   def sqrt(%Decimal{coef: :NaN} = num),
     do: error(:invalid_operation, "operation on NaN", num)
@@ -1133,7 +1131,7 @@ defmodule Decimal do
       #Decimal<3.14>
 
   """
-  doc_since("1.5.0")
+
   @spec from_float(float) :: t
   def from_float(float) when is_float(float) do
     float
@@ -1407,7 +1405,7 @@ defmodule Decimal do
       iex> Decimal.integer?("1.10")
       false
   """
-  doc_since("2.0.0")
+
   @spec integer?(decimal()) :: boolean
   def integer?(%Decimal{coef: :NaN}), do: false
   def integer?(%Decimal{coef: :inf}), do: false
