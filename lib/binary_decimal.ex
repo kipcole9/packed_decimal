@@ -1,4 +1,4 @@
-defmodule PackedDecimal do
+defmodule BinaryDecimal do
   @moduledoc """
   Decimal arithmetic on *fixed* precision floating-point numbers.
 
@@ -60,7 +60,7 @@ defmodule PackedDecimal do
     * `:inf` - Infinity.
 
   """
-  @type coefficient :: non_neg_integer
+  @type coefficient :: non_neg_integer | :NaN | :inf
 
   @typedoc """
   The exponent to which `10` is raised.
@@ -114,62 +114,6 @@ defmodule PackedDecimal do
   max_bits = Application.compile_env(:binary_decimal, :max_bits, 60)
   coef_bits = max_bits - exp_bits - @flag_bits
 
-  sign_bit = max_bits
-  nan_bit = max_bits - 1
-  inf_bit = max_bits - 2
-
-  sign_mask = 1 <<< (sign_bit - 1)
-  nan_mask = 1 <<< (nan_bit - 1)
-  inf_mask = 1 <<< (inf_bit - 1)
-
-  defmacro sgn(int) do
-    sign_mask = unquote(sign_mask)
-    sign_bit = unquote(sign_bit)
-
-    quote do
-      (unquote(int) &&& unquote(sign_mask)) >>> (unquote(sign_bit) - 1)
-    end
-  end
-
-  defmacro nan(int) do
-    nan_mask = unquote(nan_mask)
-    nan_bit = unquote(nan_bit)
-
-    quote do
-      (unquote(int) &&& unquote(nan_mask)) >>> (unquote(nan_bit) - 1)
-    end
-  end
-
-  defmacro inf(int) do
-    inf_mask = unquote(inf_mask)
-    inf_bit = unquote(inf_bit)
-
-    quote do
-      (unquote(int) &&& unquote(inf_mask)) >>> (unquote(inf_bit) - 1)
-    end
-  end
-
-  exp_mask = :math.pow(2, exp_bits) |> trunc |> Kernel.-(1) |> Bitwise.bsl(coef_bits)
-
-  defmacro exp(int) do
-    exp_mask = unquote(exp_mask)
-    coef_bits = unquote(coef_bits)
-
-    quote do
-      (unquote(int) &&& unquote(exp_mask)) >>> unquote(coef_bits)
-    end
-  end
-
-  coef_mask = :math.pow(2, coef_bits) |> trunc |> Kernel.-(1)
-
-  defmacro coef(int) do
-    coef_mask = unquote(coef_mask)
-
-    quote do
-      unquote(int) &&& unquote(coef_mask)
-    end
-  end
-
   defp binary_decimal(exp_bits, coef_bits) do
     quote do
       %__MODULE__{binary_decimal:
@@ -217,7 +161,7 @@ defmodule PackedDecimal do
     end
   end
 
-  defmacrop not_a_number(sign \\ 1) do
+  defmacrop nan(sign \\ 1) do
     exp_bits = unquote(exp_bits)
     coef_bits = unquote(coef_bits)
 
@@ -390,7 +334,7 @@ defmodule PackedDecimal do
 
   def add(binary_decimal(1), binary_decimal(2)) when inf1 == 1 and inf2 == 1 do
     silence_unused(1); silence_unused(2)
-    error(:invalid_operation, "adding +Infinity and -Infinity", not_a_number())
+    error(:invalid_operation, "adding +Infinity and -Infinity", nan())
   end
 
   def add(binary_decimal(1) = num1, binary_decimal(2)) when inf1 == 1 do
@@ -620,7 +564,7 @@ defmodule PackedDecimal do
 
   def div(binary_decimal(1), binary_decimal(2)) when inf1 == 1 and inf2 == 1 do
     silence_unused(1); silence_unused(2)
-    error(:invalid_operation, "±Infinity / ±Infinity", not_a_number())
+    error(:invalid_operation, "±Infinity / ±Infinity", nan())
   end
 
   def div(binary_decimal(1) = num1, binary_decimal(2)) when inf1 == 1 do
@@ -639,7 +583,7 @@ defmodule PackedDecimal do
 
   def div(binary_decimal(1), binary_decimal(2)) when coef1 == 0 and coef2 == 0 do
     silence_unused(1); silence_unused(2)
-    error(:invalid_operation, "0 / 0", not_a_number())
+    error(:invalid_operation, "0 / 0", nan())
   end
 
   def div(binary_decimal(1), binary_decimal(2)) when coef2 == 0 do
@@ -698,7 +642,7 @@ defmodule PackedDecimal do
 
   def div_int(binary_decimal(1), binary_decimal(2)) when inf1 == 1 and inf2 == 1 do
     silence_unused(1); silence_unused(2)
-    error(:invalid_operation, "±Infinity / ±Infinity", not_a_number())
+    error(:invalid_operation, "±Infinity / ±Infinity", nan())
   end
 
   def div_int(binary_decimal(1) = num1, binary_decimal(2)) when inf1 == 1 do
@@ -715,7 +659,7 @@ defmodule PackedDecimal do
 
   def div_int(binary_decimal(1), binary_decimal(2)) when coef1 == 0 and coef2 == 0 do
     silence_unused(1); silence_unused(2)
-    error(:invalid_operation, "0 / 0", not_a_number())
+    error(:invalid_operation, "0 / 0", nan())
   end
 
   def div_int(binary_decimal(1), binary_decimal(2)) when coef2 == 0 do
@@ -779,7 +723,7 @@ defmodule PackedDecimal do
 
   def rem(binary_decimal(1), binary_decimal(2)) when inf1 == 1 and inf2 == 1 do
     silence_unused(1); silence_unused(2)
-    error(:invalid_operation, "±Infinity / ±Infinity", not_a_number())
+    error(:invalid_operation, "±Infinity / ±Infinity", nan())
   end
 
   def rem(binary_decimal(1), binary_decimal(2)) when inf1 == 1 do
@@ -796,7 +740,7 @@ defmodule PackedDecimal do
 
   def rem(binary_decimal(1), binary_decimal(2)) when coef1 == 0 and coef2 == 0 do
     silence_unused(1); silence_unused(2)
-    error(:invalid_operation, "0 / 0", not_a_number())
+    error(:invalid_operation, "0 / 0", nan())
   end
 
   def rem(binary_decimal(1), binary_decimal(2)) when coef2 == 0 do
@@ -1090,12 +1034,12 @@ defmodule PackedDecimal do
 
   def mult(binary_decimal(1), binary_decimal(2)) when coef1 == 0 and inf2 == 1 do
     silence_unused(1); silence_unused(2)
-    error(:invalid_operation, "0 * ±Infinity", not_a_number())
+    error(:invalid_operation, "0 * ±Infinity", nan())
   end
 
   def mult(binary_decimal(1), binary_decimal(2)) when inf1 == 1 and coef2 == 0 do
     silence_unused(1); silence_unused(2)
-    error(:invalid_operation, "0 * ±Infinity", not_a_number())
+    error(:invalid_operation, "0 * ±Infinity", nan())
   end
 
   def mult(binary_decimal(1), binary_decimal(2)) when inf1 == 1 do
@@ -1385,7 +1329,7 @@ defmodule PackedDecimal do
   end
 
   def new(sign, :NaN, _exp) do
-    not_a_number(sign)
+    nan(sign)
   end
 
   def new(sign, :inf, _exp) do
@@ -1781,7 +1725,7 @@ defmodule PackedDecimal do
         :error,
         :invalid_operation,
         "integer division impossible, quotient too large",
-        not_a_number()
+        nan()
       }
     else
       {:ok, new(div_sign, _nan = 0, _inf = 0, _exp = 0, coef)}
@@ -1967,7 +1911,7 @@ defmodule PackedDecimal do
 
   defp parse_unsign(<<first, remainder::size(2)-binary, rest::binary>>) when first in [?n, ?N] do
     if String.downcase(remainder) == "an" do
-      {not_a_number(), rest}
+      {nan(), rest}
     else
       :error
     end
@@ -2072,14 +2016,14 @@ defmodule PackedDecimal do
   end
 end
 
-defimpl Inspect, for: IntegerDecimal do
+defimpl Inspect, for: BinaryDecimal do
   def inspect(dec, _opts) do
-    "#PackedDecimal<" <> IntegerDecimal.to_string(dec) <> ">"
+    "#PackedDecimal<" <> BinaryDecimal.to_string(dec) <> ">"
   end
 end
 
-defimpl String.Chars, for: IntegerDecimal do
+defimpl String.Chars, for: PackedDecimal do
   def to_string(dec) do
-    IntegerDecimal.to_string(dec)
+    BinaryDecimal.to_string(dec)
   end
 end
