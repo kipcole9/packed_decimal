@@ -1,9 +1,8 @@
-# Small Decimal
-
+# Packed Decimal
 
 *Fixed* precision decimal arithmetic aiming to be a plugin replacement for [Decimal](https://github.com/erijmc/decimal) but packing the sign, coefficient and exponent packed into an integer. This necessarily limits the size of the numbers that can be represented but does create a more space efficient mechanism.
 
-Like `Decimal`, the `Context` is used to define precision and hence influence the number of bits used to store the number. If the number of bits is <= 60 then on a 64-bit system this means the number will be stored as a small integer on the BEAM which is the most compact representation.
+Like `Decimal`, a context is used to define precision and hence influence the number of bits used to store the number. If the number of bits is <= 60 then on a 64-bit system this means the number will be stored as a small integer on the BEAM which is the most compact representation. However, unlike `Decimal`, the context is defined at compile time since it is used to allocate bits between exponent and coefficient only and for efficiency reasons this needs to be known at compile time.
 
 ## Usage
 
@@ -11,7 +10,7 @@ Add Decimal as a dependency in your `mix.exs` file:
 
 ```elixir
 def deps do
-  [{:small_decimal, "~> 0.1"}]
+  [{:packed_decimal, "~> 0.1"}]
 end
 ```
 
@@ -19,7 +18,7 @@ Next, run `mix deps.get` in your shell to fetch and compile `Decimal`. Start an
 interactive Elixir shell with `iex -S mix`:
 
 ```elixir
-iex> alias SmallDecimal, as: D
+iex> alias PackedDecimal, as: D
 iex> D.add(6, 7)
 #Decimal<13>
 iex> D.div(1, 3)
