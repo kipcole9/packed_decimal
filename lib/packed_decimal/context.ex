@@ -1,5 +1,4 @@
 defmodule Decimal.Context do
-  import Decimal.Macros
   alias Decimal.Context
 
   @moduledoc """

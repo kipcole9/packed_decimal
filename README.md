@@ -1,8 +1,10 @@
 # Packed Decimal
 
-*Fixed* precision decimal arithmetic aiming to be a plugin replacement for [Decimal](https://github.com/erijmc/decimal) but packing the sign, coefficient and exponent packed into an integer. This necessarily limits the size of the numbers that can be represented but does create a more space efficient mechanism.
+*Fixed* precision decimal arithmetic aiming to be a plugin replacement for [Decimal](https://github.com/ericmj/decimal) but packing the sign, coefficient and exponent packed into an integer. This necessarily limits the size of the numbers that can be represented but does create a more space efficient mechanism.
 
 Like `Decimal`, a context is used to define precision and hence influence the number of bits used to store the number. If the number of bits is <= 60 then on a 64-bit system this means the number will be stored as a small integer on the BEAM which is the most compact representation. However, unlike `Decimal`, the context is defined at compile time since it is used to allocate bits between exponent and coefficient only and for efficiency reasons this needs to be known at compile time.
+
+The `Decimal` package is to be strongly preferred over this package in nearly all situations. Only if space optimization is a requirement should this package be considered.
 
 ## Usage
 
