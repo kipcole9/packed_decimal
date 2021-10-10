@@ -47,8 +47,8 @@ defmodule PackedDecimal do
 
   import Bitwise
   import Kernel, except: [abs: 1, div: 2, max: 2, min: 2, rem: 2, round: 1]
-  alias Decimal.Context
-  alias Decimal.Error
+  alias PackedDecimal.Context
+  alias PackedDecimal.Error
 
   @power_of_2_to_52 4_503_599_627_370_496
 
@@ -113,9 +113,6 @@ defmodule PackedDecimal do
   exp_bits = Application.compile_env(:packed_decimal, :exponent_bits, 10)
   max_bits = Application.compile_env(:packed_decimal, :max_bits, 60)
   coef_bits = max_bits - exp_bits - @flag_bits
-
-  @exp_bits quote(do: signed-integer-unquote(exp_bits))
-  @coef_bits quote(do: integer-unquote(coef_bits))
 
   defp packed_decimal(exp_bits, coef_bits) do
     quote do
@@ -547,199 +544,241 @@ defmodule PackedDecimal do
 
   ## Examples
 
-      iex> Decimal.div(3, 4)
+      iex> PackedDecimal.div(3, 4)
       #Decimal<0.75>
 
-      iex> Decimal.div("Inf", -1)
+      iex> PackedDecimal.div("Inf", -1)
       #Decimal<-Infinity>
 
   """
   @spec div(decimal, decimal) :: t
-  def div(%Decimal{coef: :NaN} = num1, %Decimal{}), do: num1
-
-  def div(%Decimal{}, %Decimal{coef: :NaN} = num2), do: num2
-
-  def div(%Decimal{coef: :inf}, %Decimal{coef: :inf}),
-    do: error(:invalid_operation, "±Infinity / ±Infinity", %Decimal{coef: :NaN})
-
-  def div(%Decimal{sign: sign1, coef: :inf} = num1, %Decimal{sign: sign2}) do
-    sign = if sign1 == sign2, do: 1, else: -1
-    %{num1 | sign: sign}
+  def div(packed_decimal(1) = num1, packed_decimal(2)) when nan1 == 1 do
+    silence_unused(1); silence_unused(2)
+    num1
   end
 
-  def div(%Decimal{sign: sign1, exp: exp1}, %Decimal{sign: sign2, coef: :inf, exp: exp2}) do
-    sign = if sign1 == sign2, do: 1, else: -1
+  def div(packed_decimal(1), packed_decimal(2) = num2) when nan2 == 1 do
+    silence_unused(1); silence_unused(2)
+    num2
+  end
+
+  def div(packed_decimal(1), packed_decimal(2)) when inf1 == 1 and inf2 == 1 do
+    silence_unused(1); silence_unused(2)
+    error(:invalid_operation, "±Infinity / ±Infinity", nan())
+  end
+
+  def div(packed_decimal(1) = num1, packed_decimal(2)) when inf1 == 1 do
+    silence_unused(1); silence_unused(2)
+    sign = if sign1 == sign2, do: 1, else: 0
+    put_sign(num1, sign)
+  end
+
+  def div(packed_decimal(1), packed_decimal(2)) when inf2 == 1 do
+    silence_unused(1); silence_unused(2)
+    sign = if sign1 == sign2, do: 1, else: 0
     # TODO: Subnormal
     # exponent?
-    %Decimal{sign: sign, coef: 0, exp: exp1 - exp2}
+    new(sign, _nan = 0, _inf = 0, exp1 - exp2, _coef = 0)
   end
 
-  def div(%Decimal{coef: 0}, %Decimal{coef: 0}),
-    do: error(:invalid_operation, "0 / 0", %Decimal{coef: :NaN})
-
-  def div(%Decimal{sign: sign1}, %Decimal{sign: sign2, coef: 0}) do
-    sign = if sign1 == sign2, do: 1, else: -1
-    error(:division_by_zero, nil, %Decimal{sign: sign, coef: :inf})
+  def div(packed_decimal(1), packed_decimal(2)) when coef1 == 0 and coef2 == 0 do
+    silence_unused(1); silence_unused(2)
+    error(:invalid_operation, "0 / 0", nan())
   end
 
-  def div(%Decimal{} = num1, %Decimal{} = num2) do
-    %Decimal{sign: sign1, coef: coef1, exp: exp1} = num1
-    %Decimal{sign: sign2, coef: coef2, exp: exp2} = num2
-    sign = if sign1 == sign2, do: 1, else: -1
+  def div(packed_decimal(1), packed_decimal(2)) when coef2 == 0 do
+    silence_unused(1); silence_unused(2)
+    sign = if sign1 == sign2, do: 1, else: 0
+    error(:division_by_zero, nil, infinity(sign))
+  end
+
+  def div(packed_decimal(1), packed_decimal(2)) do
+    silence_unused(1); silence_unused(2)
+    sign = if sign1 == sign2, do: 1, else: 0
 
     if coef1 == 0 do
-      context(%Decimal{sign: sign, coef: 0, exp: exp1 - exp2}, [])
+      context(new(sign, _nan = 0, _inf = 0, exp1 - exp2, _coef = 0), [])
     else
       prec10 = pow10(Context.get().precision)
       {coef1, coef2, adjust} = div_adjust(coef1, coef2, 0)
       {coef, adjust, _rem, signals} = div_calc(coef1, coef2, 0, adjust, prec10)
 
-      context(%Decimal{sign: sign, coef: coef, exp: exp1 - exp2 - adjust}, signals)
+      context(new(sign, _nan = 0, _inf = 0, exp1 - exp2 - adjust, coef), signals)
     end
   end
 
   def div(num1, num2) do
     div(decimal(num1), decimal(num2))
   end
-#
-#   @doc """
-#   Divides two numbers and returns the integer part.
-#
-#   ## Exceptional conditions
-#
-#     * If both numbers are ±Infinity `:invalid_operation` is signalled.
-#     * If both numbers are ±0 `:invalid_operation` is signalled.
-#     * If second number (denominator) is ±0 `:division_by_zero` is signalled.
-#
-#   ## Examples
-#
-#       iex> Decimal.div_int(5, 2)
-#       #Decimal<2>
-#
-#       iex> Decimal.div_int("Inf", -1)
-#       #Decimal<-Infinity>
-#
-#   """
-#   @spec div_int(decimal, decimal) :: t
-#   def div_int(%Decimal{coef: :NaN} = num1, %Decimal{}), do: num1
-#
-#   def div_int(%Decimal{}, %Decimal{coef: :NaN} = num2), do: num2
-#
-#   def div_int(%Decimal{coef: :inf}, %Decimal{coef: :inf}),
-#     do: error(:invalid_operation, "±Infinity / ±Infinity", %Decimal{coef: :NaN})
-#
-#   def div_int(%Decimal{sign: sign1, coef: :inf} = num1, %Decimal{sign: sign2}) do
-#     sign = if sign1 == sign2, do: 1, else: -1
-#     %{num1 | sign: sign}
-#   end
-#
-#   def div_int(%Decimal{sign: sign1, exp: exp1}, %Decimal{sign: sign2, coef: :inf, exp: exp2}) do
-#     sign = if sign1 == sign2, do: 1, else: -1
-#     # TODO: Subnormal
-#     # exponent?
-#     %Decimal{sign: sign, coef: 0, exp: exp1 - exp2}
-#   end
-#
-#   def div_int(%Decimal{coef: 0}, %Decimal{coef: 0}),
-#     do: error(:invalid_operation, "0 / 0", %Decimal{coef: :NaN})
-#
-#   def div_int(%Decimal{sign: sign1}, %Decimal{sign: sign2, coef: 0}) do
-#     div_sign = if sign1 == sign2, do: 1, else: -1
-#     error(:division_by_zero, nil, %Decimal{sign: div_sign, coef: :inf})
-#   end
-#
-#   def div_int(%Decimal{} = num1, %Decimal{} = num2) do
-#     %Decimal{sign: sign1, coef: coef1, exp: exp1} = num1
-#     %Decimal{sign: sign2, coef: coef2, exp: exp2} = num2
-#     div_sign = if sign1 == sign2, do: 1, else: -1
-#
-#     cond do
-#       compare(%{num1 | sign: 1}, %{num2 | sign: 1}) == :lt ->
-#         %Decimal{sign: div_sign, coef: 0, exp: exp1 - exp2}
-#
-#       coef1 == 0 ->
-#         context(%{num1 | sign: div_sign})
-#
-#       true ->
-#         case integer_division(div_sign, coef1, exp1, coef2, exp2) do
-#           {:ok, result} ->
-#             result
-#
-#           {:error, error, reason, num} ->
-#             error(error, reason, num)
-#         end
-#     end
-#   end
-#
-#   def div_int(num1, num2) do
-#     div_int(decimal(num1), decimal(num2))
-#   end
-#
-#   @doc """
-#   Remainder of integer division of two numbers. The result will have the sign of
-#   the first number.
-#
-#   ## Exceptional conditions
-#
-#     * If both numbers are ±Infinity `:invalid_operation` is signalled.
-#     * If both numbers are ±0 `:invalid_operation` is signalled.
-#     * If second number (denominator) is ±0 `:division_by_zero` is signalled.
-#
-#   ## Examples
-#
-#       iex> Decimal.rem(5, 2)
-#       #Decimal<1>
-#
-#   """
-#   @spec rem(decimal, decimal) :: t
-#   def rem(%Decimal{coef: :NaN} = num1, %Decimal{}), do: num1
-#
-#   def rem(%Decimal{}, %Decimal{coef: :NaN} = num2), do: num2
-#
-#   def rem(%Decimal{coef: :inf}, %Decimal{coef: :inf}),
-#     do: error(:invalid_operation, "±Infinity / ±Infinity", %Decimal{coef: :NaN})
-#
-#   def rem(%Decimal{sign: sign1, coef: :inf}, %Decimal{}), do: %Decimal{sign: sign1, coef: 0}
-#
-#   def rem(%Decimal{sign: sign1}, %Decimal{coef: :inf} = num2) do
-#     # TODO: Subnormal
-#     # exponent?
-#     %{num2 | sign: sign1}
-#   end
-#
-#   def rem(%Decimal{coef: 0}, %Decimal{coef: 0}),
-#     do: error(:invalid_operation, "0 / 0", %Decimal{coef: :NaN})
-#
-#   def rem(%Decimal{sign: sign1}, %Decimal{coef: 0}),
-#     do: error(:division_by_zero, nil, %Decimal{sign: sign1, coef: 0})
-#
-#   def rem(%Decimal{} = num1, %Decimal{} = num2) do
-#     %Decimal{sign: sign1, coef: coef1, exp: exp1} = num1
-#     %Decimal{sign: sign2, coef: coef2, exp: exp2} = num2
-#
-#     cond do
-#       compare(%{num1 | sign: 1}, %{num2 | sign: 1}) == :lt ->
-#         %{num1 | sign: sign1}
-#
-#       coef1 == 0 ->
-#         context(%{num2 | sign: sign1})
-#
-#       true ->
-#         div_sign = if sign1 == sign2, do: 1, else: -1
-#
-#         case integer_division(div_sign, coef1, exp1, coef2, exp2) do
-#           {:ok, result} ->
-#             sub(num1, mult(num2, result))
-#
-#           {:error, error, reason, num} ->
-#             error(error, reason, num)
-#         end
-#     end
-#   end
-#
-#   def rem(num1, num2) do
-#     rem(decimal(num1), decimal(num2))
-#   end
+
+  @doc """
+  Divides two numbers and returns the integer part.
+
+  ## Exceptional conditions
+
+    * If both numbers are ±Infinity `:invalid_operation` is signalled.
+    * If both numbers are ±0 `:invalid_operation` is signalled.
+    * If second number (denominator) is ±0 `:division_by_zero` is signalled.
+
+  ## Examples
+
+      iex> PackedDecimal.div_int(5, 2)
+      #Decimal<2>
+
+      iex> PackedDecimal.div_int("Inf", -1)
+      #Decimal<-Infinity>
+
+  """
+  @spec div_int(decimal, decimal) :: t
+  def div_int(packed_decimal(1) = num1, packed_decimal(2)) when nan1 == 1 do
+    silence_unused(1); silence_unused(2)
+    num1
+  end
+
+  def div_int(packed_decimal(1), packed_decimal(2) = num2) when nan2 == 1 do
+    silence_unused(1); silence_unused(2)
+    num2
+  end
+
+  def div_int(packed_decimal(1), packed_decimal(2)) when inf1 == 1 and inf2 == 1 do
+    silence_unused(1); silence_unused(2)
+    error(:invalid_operation, "±Infinity / ±Infinity", nan())
+  end
+
+  def div_int(packed_decimal(1) = num1, packed_decimal(2)) when inf1 == 1 do
+    silence_unused(1); silence_unused(2)
+    sign = if sign1 == sign2, do: 1, else: 0
+    put_sign(num1, sign)
+  end
+
+  def div_int(packed_decimal(1), packed_decimal(2)) when inf2 == 1 do
+    silence_unused(1); silence_unused(2)
+    sign = if sign1 == sign2, do: 1, else: 0
+    new(sign, _nan = 0, _inf = 0, exp1 - exp2, _coef = 0)
+  end
+
+  def div_int(packed_decimal(1), packed_decimal(2)) when coef1 == 0 and coef2 == 0 do
+    silence_unused(1); silence_unused(2)
+    error(:invalid_operation, "0 / 0", nan())
+  end
+
+  def div_int(packed_decimal(1), packed_decimal(2)) when coef2 == 0 do
+    silence_unused(1); silence_unused(2)
+    div_sign = if sign1 == sign2, do: 1, else: 0
+    error(:division_by_zero, nil, infinity(div_sign))
+  end
+
+  def div_int(packed_decimal(1) = num1, packed_decimal(2) = num2) do
+    silence_unused(1); silence_unused(2)
+    div_sign = if sign1 == sign2, do: 1, else: -1
+
+    cond do
+      compare(put_sign(num1, 1), put_sign(num2, 1)) == :lt ->
+        new(div_sign, _nan = 0, _inf = 0, exp1 - exp2, _coef: 0)
+
+      coef1 == 0 ->
+        context(put_sign(num1, div_sign))
+
+      true ->
+        case integer_division(div_sign, coef1, exp1, coef2, exp2) do
+          {:ok, result} ->
+            result
+
+          {:error, error, reason, num} ->
+            error(error, reason, num)
+        end
+    end
+  end
+
+  def div_int(num1, num2) do
+    div_int(decimal(num1), decimal(num2))
+  end
+
+  @doc """
+  Remainder of integer division of two numbers. The result will have the sign of
+  the first number.
+
+  ## Exceptional conditions
+
+    * If both numbers are ±Infinity `:invalid_operation` is signalled.
+    * If both numbers are ±0 `:invalid_operation` is signalled.
+    * If second number (denominator) is ±0 `:division_by_zero` is signalled.
+
+  ## Examples
+
+      iex> Decimal.rem(5, 2)
+      #Decimal<1>
+
+  """
+  @spec rem(decimal, decimal) :: t
+  def rem(packed_decimal(1) = num1, packed_decimal(2)) when nan1 == 1 do
+    silence_unused(1); silence_unused(2)
+    num1
+  end
+
+  def rem(packed_decimal(1), packed_decimal(2) = num2) when nan2 == 1 do
+    silence_unused(1); silence_unused(2)
+    num2
+  end
+
+  def rem(packed_decimal(1), packed_decimal(2)) when inf1 == 1 and inf2 == 1 do
+    silence_unused(1); silence_unused(2)
+    error(:invalid_operation, "±Infinity / ±Infinity", nan())
+  end
+
+  def rem(packed_decimal(1), packed_decimal(2)) when inf1 == 1 do
+    silence_unused(1); silence_unused(2)
+    new(sign1, _nan = 0, _inf = 0, _exp = 0, _coef = 0)
+  end
+
+  def rem(packed_decimal(1), packed_decimal(2) = num2) when inf2 == 1 do
+    silence_unused(1); silence_unused(2)
+    # TODO: Subnormal
+    # exponent?
+    put_sign(num2, sign1)
+  end
+
+  def rem(packed_decimal(1), packed_decimal(2)) when coef1 == 0 and coef2 == 0 do
+    silence_unused(1); silence_unused(2)
+    error(:invalid_operation, "0 / 0", nan())
+  end
+
+  def rem(packed_decimal(1), packed_decimal(2)) when coef2 == 0 do
+    silence_unused(1); silence_unused(2)
+    error(:division_by_zero, nil, new(sign1, _nan = 0, _inf = 0, _exp = 0, _coef = 0))
+  end
+
+  def rem(packed_decimal(1), packed_decimal(2)) when coef2 == 0 do
+    silence_unused(1); silence_unused(2)
+    error(:division_by_zero, nil, new(sign1, _nan = 0, _inf = 0, _exp = 0, _coef = 0))
+  end
+
+  def rem(packed_decimal(1) = num1, packed_decimal(2) = num2) do
+    silence_unused(1); silence_unused(2)
+
+    cond do
+      compare(put_sign(num1, 1), put_sign(num2, 1)) == :lt ->
+        put_sign(num1, 1)
+
+      coef1 == 0 ->
+        context(put_sign(num2, sign1))
+
+      true ->
+        div_sign = if sign1 == sign2, do: 1, else: -1
+
+        case integer_division(div_sign, coef1, exp1, coef2, exp2) do
+          {:ok, result} ->
+            sub(num1, mult(num2, result))
+
+          {:error, error, reason, num} ->
+            error(error, reason, num)
+        end
+    end
+  end
+
+  def rem(num1, num2) do
+    rem(decimal(num1), decimal(num2))
+  end
 #
 #   @doc """
 #   Integer division of two numbers and the remainder. Should be used when both
@@ -920,102 +959,113 @@ defmodule PackedDecimal do
 #     min(decimal(num1), decimal(num2))
 #   end
 #
-#   @doc """
-#   Negates the given number.
-#
-#   ## Examples
-#
-#       iex> Decimal.negate(1)
-#       #Decimal<-1>
-#
-#       iex> Decimal.negate("-Inf")
-#       #Decimal<Infinity>
-#
-#   """
-#
-#   @spec negate(decimal) :: t
-#   def negate(%Decimal{coef: :NaN} = num), do: num
-#   def negate(%Decimal{sign: sign} = num), do: context(%{num | sign: -sign})
-#   def negate(num), do: negate(decimal(num))
-#
-#   @doc """
-#   Applies the context to the given number rounding it to specified precision.
-#   """
-#
-#   @spec apply_context(t) :: t
-#   def apply_context(%Decimal{} = num), do: context(num)
-#
-#   @doc """
-#   Check if given number is positive
-#   """
-#
-#   @spec positive?(t) :: boolean
-#   def positive?(%Decimal{coef: :NaN}), do: false
-#   def positive?(%Decimal{coef: 0}), do: false
-#   def positive?(%Decimal{sign: -1}), do: false
-#   def positive?(%Decimal{sign: 1}), do: true
-#
-#   @doc """
-#   Check if given number is negative
-#   """
-#
-#   @spec negative?(t) :: boolean
-#   def negative?(%Decimal{coef: :NaN}), do: false
-#   def negative?(%Decimal{coef: 0}), do: false
-#   def negative?(%Decimal{sign: 1}), do: false
-#   def negative?(%Decimal{sign: -1}), do: true
-#
-#   @doc """
-#   Multiplies two numbers.
-#
-#   ## Exceptional conditions
-#
-#     * If one number is ±0 and the other is ±Infinity `:invalid_operation` is
-#       signalled.
-#
-#   ## Examples
-#
-#       iex> Decimal.mult("0.5", 3)
-#       #Decimal<1.5>
-#
-#       iex> Decimal.mult("Inf", -1)
-#       #Decimal<-Infinity>
-#
-#   """
-#   @spec mult(decimal, decimal) :: t
-#   def mult(%Decimal{coef: :NaN} = num1, %Decimal{}), do: num1
-#
-#   def mult(%Decimal{}, %Decimal{coef: :NaN} = num2), do: num2
-#
-#   def mult(%Decimal{coef: 0}, %Decimal{coef: :inf}),
-#     do: error(:invalid_operation, "0 * ±Infinity", %Decimal{coef: :NaN})
-#
-#   def mult(%Decimal{coef: :inf}, %Decimal{coef: 0}),
-#     do: error(:invalid_operation, "0 * ±Infinity", %Decimal{coef: :NaN})
-#
-#   def mult(%Decimal{sign: sign1, coef: :inf, exp: exp1}, %Decimal{sign: sign2, exp: exp2}) do
-#     sign = if sign1 == sign2, do: 1, else: -1
-#     # exponent?
-#     %Decimal{sign: sign, coef: :inf, exp: exp1 + exp2}
-#   end
-#
-#   def mult(%Decimal{sign: sign1, exp: exp1}, %Decimal{sign: sign2, coef: :inf, exp: exp2}) do
-#     sign = if sign1 == sign2, do: 1, else: -1
-#     # exponent?
-#     %Decimal{sign: sign, coef: :inf, exp: exp1 + exp2}
-#   end
-#
-#   def mult(%Decimal{} = num1, %Decimal{} = num2) do
-#     %Decimal{sign: sign1, coef: coef1, exp: exp1} = num1
-#     %Decimal{sign: sign2, coef: coef2, exp: exp2} = num2
-#     sign = if sign1 == sign2, do: 1, else: -1
-#     %Decimal{sign: sign, coef: coef1 * coef2, exp: exp1 + exp2} |> context()
-#   end
-#
-#   def mult(num1, num2) do
-#     mult(decimal(num1), decimal(num2))
-#   end
-#
+  @doc """
+  Negates the given number.
+
+  ## Examples
+
+      iex> Decimal.negate(1)
+      #Decimal<-1>
+
+      iex> Decimal.negate("-Inf")
+      #Decimal<Infinity>
+
+  """
+
+  @spec negate(decimal) :: t
+  def negate(packed_decimal() = num) when nan == 1, do: (silence_unused(); num)
+  def negate(packed_decimal() = num), do: (silence_unused(); context(put_sign(num, -sign)))
+  def negate(num), do: negate(decimal(num))
+
+  @doc """
+  Applies the context to the given number rounding it to specified precision.
+  """
+
+  @spec apply_context(t) :: t
+  def apply_context(packed_decimal() = num), do: (silence_unused(); context(num))
+
+  @doc """
+  Check if given number is positive
+  """
+
+  @spec positive?(t) :: boolean
+  def positive?(packed_decimal()) when nan == 1, do: (silence_unused(); false)
+  def positive?(packed_decimal()) when coef == 0, do: (silence_unused(); false)
+  def positive?(packed_decimal()) when sign == 0, do: (silence_unused(); false)
+  def positive?(packed_decimal()) when sign == 1, do: (silence_unused(); true)
+
+  @doc """
+  Check if given number is negative
+  """
+
+  @spec negative?(t) :: boolean
+  def negative?(packed_decimal()) when nan == 1, do: (silence_unused(); false)
+  def negative?(packed_decimal()) when coef == 0, do: (silence_unused(); false)
+  def negative?(packed_decimal()) when sign == 1, do: (silence_unused(); false)
+  def negative?(packed_decimal()) when sign == 0, do: (silence_unused(); true)
+
+  @doc """
+  Multiplies two numbers.
+
+  ## Exceptional conditions
+
+    * If one number is ±0 and the other is ±Infinity `:invalid_operation` is
+      signalled.
+
+  ## Examples
+
+      iex> PackedDecimal.mult("0.5", 3)
+      #Decimal<1.5>
+
+      iex> PackedDecimal.mult("Inf", -1)
+      #Decimal<-Infinity>
+
+  """
+  @spec mult(decimal, decimal) :: t
+  def mult(packed_decimal(1) = num1, packed_decimal(2)) when nan1 == 1 do
+    silence_unused(1); silence_unused(2)
+    num1
+  end
+
+  def mult(packed_decimal(1), packed_decimal(2) = num2) when nan2 == 1 do
+    silence_unused(1); silence_unused(2)
+    num2
+  end
+
+  def mult(packed_decimal(1), packed_decimal(2)) when coef1 == 0 and inf2 == 1 do
+    silence_unused(1); silence_unused(2)
+    error(:invalid_operation, "0 * ±Infinity", nan())
+  end
+
+  def mult(packed_decimal(1), packed_decimal(2)) when inf1 == 1 and coef2 == 0 do
+    silence_unused(1); silence_unused(2)
+    error(:invalid_operation, "0 * ±Infinity", nan())
+  end
+
+  def mult(packed_decimal(1), packed_decimal(2)) when inf1 == 1 do
+    silence_unused(1); silence_unused(2)
+    sign = if sign1 == sign2, do: 1, else: -1
+    # exponent?
+    new(sign, _nan = 0, _inf = 1, exp1 + exp2, _coef = 0)
+  end
+
+  def mult(packed_decimal(1), packed_decimal(2)) when inf2 == 1 do
+    silence_unused(1); silence_unused(2)
+    sign = if sign1 == sign2, do: 1, else: -1
+    # exponent?
+    new(sign, _nan = 0, _inf = 1, exp1 + exp2, _coef = 0)
+  end
+
+  def mult(packed_decimal(1), packed_decimal(2)) do
+    silence_unused(1); silence_unused(2)
+    sign = if sign1 == sign2, do: 1, else: -1
+    new(sign, _nan = 0, _inf = 0, exp1 + exp2, coef1 * coef2)
+  end
+
+  def mult(num1, num2) do
+    mult(decimal(num1), decimal(num2))
+  end
+
   @doc """
   Normalizes the given decimal: removes trailing zeros from coefficient while
   keeping the number numerically equivalent by increasing the exponent.
@@ -1060,7 +1110,7 @@ defmodule PackedDecimal do
   (default is to round to nearest one). If places is negative, at least that
   many digits to the left of the decimal point will be zero.
 
-  See `Decimal.Context` for more information about rounding algorithms.
+  See `PackedDecimal.Context` for more information about rounding algorithms.
 
   ## Examples
 

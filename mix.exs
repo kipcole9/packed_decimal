@@ -1,16 +1,16 @@
-defmodule Decimal.Mixfile do
+defmodule PackedDecimal.Mixfile do
   use Mix.Project
 
-  @version "2.0.0"
-  @source_url "https://github.com/ericmj/decimal"
+  @version "0.1.0"
+  @source_url "https://github.com/kipcole9/packed_decimal"
 
   def project() do
     [
-      app: :decimal,
+      app: :packed_decimal,
       version: @version,
-      elixir: "~> 1.2",
+      elixir: "~> 1.10",
       deps: deps(),
-      name: "Decimal",
+      name: "Packed Decimal",
       source_url: @source_url,
       docs: [source_ref: "v#{@version}", main: "readme", extras: ["README.md"]],
       description: description(),
@@ -29,12 +29,12 @@ defmodule Decimal.Mixfile do
   end
 
   defp description() do
-    "Arbitrary precision decimal arithmetic."
+    "Fixed precision decimal arithmetic modelled after Decimal."
   end
 
   defp package() do
     [
-      maintainers: ["Eric Meadows-Jönsson"],
+      maintainers: ["Kip Cole"],
       licenses: ["Apache-2.0"],
       links: %{"GitHub" => @source_url}
     ]

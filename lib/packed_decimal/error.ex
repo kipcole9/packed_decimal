@@ -1,4 +1,4 @@
-defmodule Decimal.Error do
+defmodule PackedDecimal.Error do
   @moduledoc """
   The exception that all decimal operations may raise.
 

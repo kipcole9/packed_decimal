@@ -1,5 +1,5 @@
-defmodule Decimal.Context do
-  alias Decimal.Context
+defmodule PackedDecimal.Context do
+  alias PackedDecimal.Context
 
   @moduledoc """
   The context is kept in the process dictionary. It can be accessed with
