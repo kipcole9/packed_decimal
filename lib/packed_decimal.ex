@@ -149,6 +149,7 @@ defmodule PackedDecimal do
   defmacrop pack(sign, nan, inf, exp, coef) do
     exp_bits = unquote(exp_bits)
     coef_bits = unquote(coef_bits)
+    max_bits = unquote(max_bits)
 
     quote do
       <<
