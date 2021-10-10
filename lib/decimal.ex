@@ -67,10 +67,10 @@ defmodule Decimal do
   @typedoc """
 
     * `1` for positive
-    * `-1` for negative
+    * `0` for negative
 
   """
-  @type sign :: 1 | -1
+  @type sign :: 1 | 0
 
   @type signal ::
           :invalid_operation
@@ -93,8 +93,6 @@ defmodule Decimal do
           | :up
 
   @typedoc """
-  This implementation models the `sign` as `1` or `-1` such that the complete number will be: `sign * coef * 10 ^ exp`.
-
     * `coef` - the coefficient of the power of `10`.
     * `exp` - the exponent of the power of `10`.
     * `sign` - `1` for positive, `0` for negative.
@@ -106,7 +104,38 @@ defmodule Decimal do
 
   # Small decimal is packed into a 60 bit integer
   small_decimal = quote do
-    << sign::1, nan::1, inf::1, exp::signed-integer-10, coef::integer-47 >>
+    <<
+      var!(sign)::1,
+      var!(nan)::1,
+      var!(inf)::1,
+      var!(exp)::signed-integer-10,
+      var!(coef)::integer-47
+    >>
+  end
+
+  nan = quote do
+    <<
+      _::1,
+      1::1,
+      _::58
+    >>
+  end
+
+  inf = quote do
+    <<
+      _::2,
+      1::1,
+      _::57
+    >>
+  end
+
+  # The compiler will optimize these steps out
+  # but they are required to silence the unused
+  # variable warnings coming from the function
+  # head match
+
+  silence_unused_warnings = quote do
+    _ = var!(sign); _ = var!(nan); _ = var!(inf); _ = var!(exp); _ = var!(coef)
   end
 
   defmacrop error(flags, reason, result, context \\ nil) do
@@ -122,15 +151,15 @@ defmodule Decimal do
   Returns `true` if number is NaN, otherwise `false`.
   """
   @spec nan?(t) :: boolean
-  def nan?(%Decimal{coef: :NaN}), do: true
-  def nan?(%Decimal{}), do: false
+  def nan?(unquote(nan)), do: true
+  def nam?(_), do: false
 
   @doc """
   Returns `true` if number is ±Infinity, otherwise `false`.
   """
   @spec inf?(t) :: boolean
-  def inf?(%Decimal{coef: :inf}), do: true
-  def inf?(%Decimal{}), do: false
+  def inf?(unquote(inf)), do: true
+  def inf?(_), do: false
 
   @doc """
   Returns `true` if argument is a decimal number, otherwise `false`.
@@ -146,41 +175,8 @@ defmodule Decimal do
   Allowed in guard tests on OTP 21+.
   """
 
-  defmacro is_decimal(term)
-
-  if function_exported?(:erlang, :is_map_key, 2) do
-    defmacro is_decimal(term) do
-      case __CALLER__.context do
-        nil ->
-          quote do
-            case unquote(term) do
-              %Decimal{} -> true
-              _ -> false
-            end
-          end
-
-        :match ->
-          raise ArgumentError,
-                "invalid expression in match, is_decimal is not allowed in patterns " <>
-                  "such as function clauses, case clauses or on the left side of the = operator"
-
-        :guard ->
-          quote do
-            is_map(unquote(term)) and :erlang.is_map_key(:__struct__, unquote(term)) and
-              :erlang.map_get(:__struct__, unquote(term)) == Decimal
-          end
-      end
-    end
-  else
-    # TODO: remove when we require Elixir v1.10
-    defmacro is_decimal(term) do
-      quote do
-        case unquote(term) do
-          %Decimal{} -> true
-          _ -> false
-        end
-      end
-    end
+  defmacro is_decimal(term) do
+    is_integer(term)
   end
 
   @doc """
