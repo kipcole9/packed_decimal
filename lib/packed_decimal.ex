@@ -95,7 +95,7 @@ defmodule PackedDecimal do
           | :half_down
           | :up
 
-  defstruct [binary_decimal: 0]
+  defstruct [packed_decimal: 0]
 
   @typedoc """
     * `coef` - the coefficient of the power of `10`.
@@ -103,31 +103,33 @@ defmodule PackedDecimal do
     * `sign` - `1` for positive, `0` for negative.
 
   """
-  @type t ::  %__MODULE__{binary_decimal: bitstring()}
+  @type t ::  %__MODULE__{packed_decimal: bitstring()}
 
   @type decimal :: t | integer | String.t()
 
   # Bits for sign, nan and inf
   @flag_bits 3
 
-  exp_bits = Application.compile_env(:binary_decimal, :exponent_bits, 10)
-  max_bits = Application.compile_env(:binary_decimal, :max_bits, 60)
+  exp_bits = Application.compile_env(:packed_decimal, :exponent_bits, 10)
+  max_bits = Application.compile_env(:packed_decimal, :max_bits, 60)
   coef_bits = max_bits - exp_bits - @flag_bits
 
-  sign_bit = max_bits
-  nan_bit = max_bits - 1
-  inf_bit = max_bits - 2
+  sign_bit = max_bits - 1
+  nan_bit = max_bits - 2
+  inf_bit = max_bits - 3
 
-  sign_mask = 1 <<< (sign_bit - 1)
-  nan_mask = 1 <<< (nan_bit - 1)
-  inf_mask = 1 <<< (inf_bit - 1)
+  sign_mask = 1 <<< sign_bit
+  nan_mask = 1 <<< nan_bit
+  inf_mask = 1 <<< inf_bit
+  exp_mask = :math.pow(2, exp_bits) |> trunc |> Kernel.-(1) |> Bitwise.bsl(coef_bits)
+  coef_mask = :math.pow(2, coef_bits) |> trunc |> Kernel.-(1)
 
   defmacro sgn(int) do
     sign_mask = unquote(sign_mask)
     sign_bit = unquote(sign_bit)
 
     quote do
-      (unquote(int) &&& unquote(sign_mask)) >>> (unquote(sign_bit) - 1)
+      (unquote(int) &&& unquote(sign_mask)) >>> unquote(sign_bit)
     end
   end
 
@@ -136,7 +138,7 @@ defmodule PackedDecimal do
     nan_bit = unquote(nan_bit)
 
     quote do
-      (unquote(int) &&& unquote(nan_mask)) >>> (unquote(nan_bit) - 1)
+      (unquote(int) &&& unquote(nan_mask)) >>> unquote(nan_bit)
     end
   end
 
@@ -145,11 +147,9 @@ defmodule PackedDecimal do
     inf_bit = unquote(inf_bit)
 
     quote do
-      (unquote(int) &&& unquote(inf_mask)) >>> (unquote(inf_bit) - 1)
+      (unquote(int) &&& unquote(inf_mask)) >>> unquote(inf_bit)
     end
   end
-
-  exp_mask = :math.pow(2, exp_bits) |> trunc |> Kernel.-(1) |> Bitwise.bsl(coef_bits)
 
   defmacro exp(int) do
     exp_mask = unquote(exp_mask)
@@ -160,8 +160,6 @@ defmodule PackedDecimal do
     end
   end
 
-  coef_mask = :math.pow(2, coef_bits) |> trunc |> Kernel.-(1)
-
   defmacro coef(int) do
     coef_mask = unquote(coef_mask)
 
@@ -170,28 +168,46 @@ defmodule PackedDecimal do
     end
   end
 
-  defp binary_decimal(exp_bits, coef_bits) do
+  defp packed_decimal(_exp_bits, _coef_bits) do
     quote do
-      %__MODULE__{binary_decimal:
-        <<
-          var!(sign)::integer-1,
-          var!(nan)::integer-1,
-          var!(inf)::integer-1,
-          var!(exp)::signed-integer-unquote(exp_bits),
-          var!(coef)::integer-unquote(coef_bits)
-        >>
-      }
+      %__MODULE__{packed_decimal: var!(int)}
     end
   end
 
-  defmacrop binary_decimal do
-    exp_bits = unquote(exp_bits)
-    coef_bits = unquote(coef_bits)
-    binary_decimal(exp_bits, coef_bits)
+  def set(packed_decimal, :sign, value) when value in -1..1 do
+    value = if value <= 0, do: 0, else: 1
+    set(packed_decimal, value, unquote(sign_mask), unquote(sign_bit))
   end
 
-  defmacro binary_decimal(n) do
-    ast = binary_decimal(unquote(exp_bits), unquote(coef_bits))
+  def set(packed_decimal, :nan, value) when value in -1..1 do
+    set(packed_decimal, value, unquote(nan_mask), unquote(nan_bit))
+  end
+
+  def set(packed_decimal, :inf, value) when value in -1..1 do
+    set(packed_decimal, value, unquote(inf_mask), unquote(inf_bit))
+  end
+
+  def set(packed_decimal, :exp, value) do
+    # TODO HANDLE negative exponents
+    set(packed_decimal, value, unquote(exp_mask), unquote(coef_bits))
+  end
+
+  def set(packed_decimal, :coef, value) when value >= 0 do
+    set(packed_decimal, value, unquote(coef_mask), 0)
+  end
+
+  def set(packed_decimal, value, mask, shift) do
+    (packed_decimal &&& bnot(mask)) ||| (value <<< shift);
+  end
+
+  defmacrop packed_decimal do
+    exp_bits = unquote(exp_bits)
+    coef_bits = unquote(coef_bits)
+    packed_decimal(exp_bits, coef_bits)
+  end
+
+  defmacro packed_decimal(n) do
+    ast = packed_decimal(unquote(exp_bits), unquote(coef_bits))
 
     Macro.prewalk(ast, fn
       {:var!, meta, [{varname, [], module}]} ->
@@ -203,47 +219,31 @@ defmodule PackedDecimal do
   end
 
   defmacrop pack(sign, nan, inf, exp, coef) do
-    exp_bits = unquote(exp_bits)
     coef_bits = unquote(coef_bits)
+    exp_bits = unquote(exp_bits)
 
     quote do
-      <<
-        unquote(sign)::integer-1,
-        unquote(nan)::integer-1,
-        unquote(inf)::integer-1,
-        unquote(exp)::signed-integer-unquote(exp_bits),
-        unquote(coef)::integer-unquote(coef_bits)
-      >>
+      unquote(sign)
+      |> bsl(1)
+      |> bor(unquote(nan))
+      |> bsl(1)
+      |> bor(unquote(inf))
+      |> bsl(unquote(exp_bits))
+      |> bor(unquote(exp))
+      |> bsl(unquote(coef_bits))
+      |> bor(unquote(coef))
     end
   end
 
   defmacrop not_a_number(sign \\ 1) do
-    exp_bits = unquote(exp_bits)
-    coef_bits = unquote(coef_bits)
-
     quote do
-      <<
-        unquote(sign)::integer-1,
-        1::integer-1,
-        0::integer-1,
-        0::signed-integer-unquote(exp_bits),
-        0::integer-unquote(coef_bits)
-      >>
+      pack(unquote(sign), _nan = 1, _inf = 0, _exp = 0, _coef = 0)
     end
   end
 
   defmacrop infinity(sign \\ 1) do
-    exp_bits = unquote(exp_bits)
-    coef_bits = unquote(coef_bits)
-
     quote do
-      <<
-        unquote(sign)::integer-1,
-        0::integer-1,
-        1::integer-1,
-        0::signed-integer-unquote(exp_bits),
-        0::integer-unquote(coef_bits)
-      >>
+      pack(unquote(sign), _nan = 0, _inf = 1, _exp = 0, _coef = 0)
     end
   end
 
@@ -264,14 +264,14 @@ defmodule PackedDecimal do
 
   defmacrop silence_unused do
     quote do
-    _ = var!(sign); _ = var!(nan); _ = var!(inf); _ = var!(exp); _ = var!(coef)
+    _ = var!(int)
     end
   end
 
   defmacrop silence_unused(n) do
     module = __MODULE__
     context = [context: module, import: Kernel]
-    vars = ["sign", "nan", "inf", "exp", "coef"]
+    vars = ["int"]
 
     quoted =
       Enum.map(vars, fn var ->
@@ -298,23 +298,23 @@ defmodule PackedDecimal do
   Returns `true` if number is NaN, otherwise `false`.
   """
   @spec nan?(t) :: boolean
-  def nan?(binary_decimal()) when nan == 1, do: (silence_unused(); true)
-  def nan?(binary_decimal()), do: (silence_unused(); false)
+  def nan?(packed_decimal()) when nan(int) == 1, do: (silence_unused(); true)
+  def nan?(packed_decimal()), do: (silence_unused(); false)
 
   @doc """
   Returns `true` if number is ±Infinity, otherwise `false`.
   """
   @spec inf?(t) :: boolean
-  def inf?(binary_decimal()) when inf == 1, do: (silence_unused(); true)
-  def inf?(binary_decimal()), do: (silence_unused(); false)
+  def inf?(packed_decimal()) when inf(int) == 1, do: (silence_unused(); true)
+  def inf?(packed_decimal()), do: (silence_unused(); false)
 
   @doc """
   Returns the sign of a packed decimal as either 1 or -1
 
   """
   @spec sign(t) :: sign()
-  def sign(binary_decimal()) when sign == 1, do: (silence_unused(); 1)
-  def sign(binary_decimal()) when sign == 0, do: (silence_unused(); -1)
+  def sign(packed_decimal()) when sgn(int) == 1, do: (silence_unused(); 1)
+  def sign(packed_decimal()) when sgn(int) == 0, do: (silence_unused(); -1)
 
   @doc """
   Returns `true` if argument is a decimal number, otherwise `false`.
@@ -331,20 +331,20 @@ defmodule PackedDecimal do
   """
 
   defguard is_decimal(term)
-    when elem(term, 0) == :binary_decimal and is_bitstring(elem(term,1))
+    when elem(term, 0) == :packed_decimal and is_bitstring(elem(term,1))
 
   @doc """
   The absolute value of given number. Sets the number's sign to positive.
   """
   @spec abs(t) :: t
-  def abs(binary_decimal() = binary_decimal) when sign == 1 do
+  def abs(packed_decimal() = packed_decimal) when sgn(int) == 1 do
     silence_unused()
-    binary_decimal
+    packed_decimal
   end
 
-  def abs(binary_decimal()) do
+  def abs(packed_decimal()) do
     silence_unused()
-    new(_sign = 1, nan, inf, exp, coef)
+    put_sign(int, 1)
   end
 
   @doc """
@@ -365,48 +365,53 @@ defmodule PackedDecimal do
 
   """
   @spec add(decimal, decimal) :: t
-  def add(binary_decimal() = decimal_1, decimal_2)
-      when nan == 1 and is_decimal(decimal_2) do
+  def add(packed_decimal() = decimal_1, decimal_2)
+      when nan(int) == 1 and is_decimal(decimal_2) do
     silence_unused()
     decimal_1
   end
 
-  def add(decimal_1, binary_decimal() = decimal_2)
-      when nan == 1 and is_decimal(decimal_1) do
+  def add(decimal_1, packed_decimal() = decimal_2)
+      when nan(int) == 1 and is_decimal(decimal_1) do
     silence_unused()
     decimal_2
   end
 
-  def add(binary_decimal(1) = num1, binary_decimal(2) = num2)
-      when inf1 == 1 and inf2 == 1 and sign1 == sign2 do
+  def add(packed_decimal(1) = num1, packed_decimal(2) = num2)
+      when inf(int1) == 1 and inf(int2) == 1 and sgn(int1) == sgn(int2) do
     silence_unused(1); silence_unused(2)
 
-    if exp1 > exp2 do
+    if exp(int1) > exp(int2) do
       num1
     else
       num2
     end
   end
 
-  def add(binary_decimal(1), binary_decimal(2)) when inf1 == 1 and inf2 == 1 do
+  def add(packed_decimal(1), packed_decimal(2)) when inf(int1) == 1 and inf(int2) == 1 do
     silence_unused(1); silence_unused(2)
     error(:invalid_operation, "adding +Infinity and -Infinity", not_a_number())
   end
 
-  def add(binary_decimal(1) = num1, binary_decimal(2)) when inf1 == 1 do
+  def add(packed_decimal(1) = num1, packed_decimal(2)) when inf(int1) == 1 do
     silence_unused(1); silence_unused(2)
     num1
   end
 
-  def add(binary_decimal(1) = num1, binary_decimal(2)) when inf2 == 1 do
+  def add(packed_decimal(1) = num1, packed_decimal(2)) when inf(int2) == 1 do
     silence_unused(1); silence_unused(2)
     num1
   end
 
-  def add(binary_decimal(1), binary_decimal(2)) do
+  def add(packed_decimal(1), packed_decimal(2)) do
     silence_unused(1); silence_unused(2)
-    sign1 = if sign1 <= 0, do: -1, else: 1
-    sign2 = if sign2 <= 0, do: -1, else: 1
+    sign1 = if sgn(int1) <= 0, do: -1, else: 1
+    sign2 = if sgn(int2) <= 0, do: -1, else: 1
+
+    exp1 = exp(int1)
+    exp2 = exp(int2)
+    coef1 = coef(int1)
+    coef2 = coef(int2)
 
     {coef1, coef2} = add_align(coef1, exp1, coef2, exp2)
     coef = sign1 * coef1 + sign2 * coef2
@@ -436,7 +441,7 @@ defmodule PackedDecimal do
 
   """
   @spec sub(decimal, decimal) :: t
-  def sub(binary_decimal(1) = num1, binary_decimal(2) = num2) do
+  def sub(packed_decimal(1) = num1, packed_decimal(2) = num2) do
     silence_unused(1); silence_unused(2)
     add(num1, put_sign(num2, -1))
   end
@@ -462,41 +467,41 @@ defmodule PackedDecimal do
 
   """
   @spec compare(decimal, decimal) :: :lt | :gt | :eq
-  def compare(binary_decimal(1), binary_decimal(2))
-      when inf1 == 1 and inf2 == 1 and sign1 == sign2,
+  def compare(packed_decimal(1), packed_decimal(2))
+      when inf(int1) == 1 and inf(int2) == 1 and sgn(int1) == sgn(int2),
     do: (silence_unused(1); silence_unused(2); :eq)
 
-  def compare(binary_decimal(1), binary_decimal(2))
-      when inf1 == 1 and inf2 == 1 and sign1 < sign2,
+  def compare(packed_decimal(1), packed_decimal(2))
+      when inf(int1) == 1 and inf(int2) == 1 and sgn(int1) < sgn(int2),
     do: (silence_unused(1); silence_unused(2); :lt)
 
-  def compare(binary_decimal(1), binary_decimal(2))
-      when inf1 == 1 and inf2 == 1 and sign1 > sign2,
+  def compare(packed_decimal(1), packed_decimal(2))
+      when inf(int1) == 1 and inf(int2) == 1 and sgn(int1) > sgn(int2),
     do: (silence_unused(1); silence_unused(2); :gt)
 
-  def compare(binary_decimal(1), _num2) when inf1 == 1 and sign1 == 1,
+  def compare(packed_decimal(1), _num2) when inf(int1) == 1 and sgn(int1) == 1,
     do: (silence_unused(1); :gt)
-  def compare(binary_decimal(1), _num2) when inf1 == 1 and sign1 == 0,
+  def compare(packed_decimal(1), _num2) when inf(int1) == 1 and sgn(int1) == 0,
     do: (silence_unused(1); :lt)
 
-  def compare(_num1, binary_decimal(2)) when inf2 == 1 and sign2 == 1,
+  def compare(_num1, packed_decimal(2)) when inf(int2) == 1 and sgn(int2) == 1,
     do: (silence_unused(2); :lt)
-  def compare(_num1, binary_decimal(2)) when inf2 == 1 and sign2 == 0,
+  def compare(_num1, packed_decimal(2)) when inf(int2) == 1 and sgn(int2) == 0,
     do: (silence_unused(2); :gt)
 
-  def compare(binary_decimal(1) = num1, _num2) when nan1 == 1,
+  def compare(packed_decimal(1) = num1, _num2) when nan(int1) == 1,
     do: (silence_unused(1); error(:invalid_operation, "operation on NaN", num1))
 
-  def compare(_num1, binary_decimal(2) = num2) when nan2 == 1,
+  def compare(_num1, packed_decimal(2) = num2) when nan(int2) == 1,
     do: (silence_unused(2); error(:invalid_operation, "operation on NaN", num2))
 
-  def compare(binary_decimal(1) = num1, binary_decimal(2) = num2) do
+  def compare(packed_decimal(1) = num1, packed_decimal(2) = num2) do
     silence_unused(1); silence_unused(2)
 
     case sub(num1, num2) do
-      binary_decimal() when coef == 0 -> silence_unused(); :eq
-      binary_decimal() when sign == 1 -> silence_unused(); :gt
-      binary_decimal() when sign == 0 -> silence_unused(); :gt
+      packed_decimal() when coef(int) == 0 -> silence_unused(); :eq
+      packed_decimal() when sgn(int) == 1 -> silence_unused(); :gt
+      packed_decimal() when sgn(int) == 0 -> silence_unused(); :gt
     end
   end
 
@@ -545,8 +550,8 @@ defmodule PackedDecimal do
   """
 
   @spec eq?(decimal, decimal) :: boolean
-  def eq?(binary_decimal(), _num2) when nan == 1, do: (silence_unused(); false)
-  def eq?(_num1, binary_decimal()) when nan == 1, do: (silence_unused(); false)
+  def eq?(packed_decimal(), _num2) when nan(int) == 1, do: (silence_unused(); false)
+  def eq?(_num1, packed_decimal()) when nan(int) == 1, do: (silence_unused(); false)
   def eq?(num1, num2), do: compare(num1, num2) == :eq
 
   @doc """
@@ -565,8 +570,8 @@ defmodule PackedDecimal do
   """
 
   @spec gt?(decimal, decimal) :: boolean
-  def gt?(binary_decimal(), _num2) when nan == 1, do: (silence_unused(); false)
-  def gt?(_num1, binary_decimal()) when nan == 1, do: (silence_unused(); false)
+  def gt?(packed_decimal(), _num2) when nan(int) == 1, do: (silence_unused(); false)
+  def gt?(_num1, packed_decimal()) when nan(int) == 1, do: (silence_unused(); false)
   def gt?(num1, num2), do: compare(num1, num2) == :gt
 
   @doc """
@@ -585,8 +590,8 @@ defmodule PackedDecimal do
   """
 
   @spec lt?(decimal, decimal) :: boolean
-  def lt?(binary_decimal(), _num2) when nan == 1, do: (silence_unused(); false)
-  def lt?(_num1, binary_decimal()) when nan == 1, do: (silence_unused(); false)
+  def lt?(packed_decimal(), _num2) when nan(int) == 1, do: (silence_unused(); false)
+  def lt?(_num1, packed_decimal()) when nan(int) == 1, do: (silence_unused(); false)
   def lt?(num1, num2), do: compare(num1, num2) == :lt
 
   @doc """
@@ -608,58 +613,58 @@ defmodule PackedDecimal do
 
   """
   @spec div(decimal, decimal) :: t
-  def div(binary_decimal(1) = num1, binary_decimal(2)) when nan1 == 1 do
+  def div(packed_decimal(1) = num1, packed_decimal(2)) when nan(int1) == 1 do
     silence_unused(1); silence_unused(2)
     num1
   end
 
-  def div(binary_decimal(1), binary_decimal(2) = num2) when nan2 == 1 do
+  def div(packed_decimal(1), packed_decimal(2) = num2) when nan(int2) == 1 do
     silence_unused(1); silence_unused(2)
     num2
   end
 
-  def div(binary_decimal(1), binary_decimal(2)) when inf1 == 1 and inf2 == 1 do
+  def div(packed_decimal(1), packed_decimal(2)) when inf(int1) == 1 and inf(int2) == 1 do
     silence_unused(1); silence_unused(2)
     error(:invalid_operation, "±Infinity / ±Infinity", not_a_number())
   end
 
-  def div(binary_decimal(1) = num1, binary_decimal(2)) when inf1 == 1 do
+  def div(packed_decimal(1) = num1, packed_decimal(2)) when inf(int1) == 1 do
     silence_unused(1); silence_unused(2)
-    sign = if sign1 == sign2, do: 1, else: 0
+    sign = if sgn(int1) == sgn(int2), do: 1, else: 0
     put_sign(num1, sign)
   end
 
-  def div(binary_decimal(1), binary_decimal(2)) when inf2 == 1 do
+  def div(packed_decimal(1), packed_decimal(2)) when inf(int2) == 1 do
     silence_unused(1); silence_unused(2)
-    sign = if sign1 == sign2, do: 1, else: 0
+    sign = if sgn(int1) == sgn(int2), do: 1, else: 0
     # TODO: Subnormal
     # exponent?
-    new(sign, _nan = 0, _inf = 0, exp1 - exp2, _coef = 0)
+    new(sign, _nan = 0, _inf = 0, exp(int1) - exp(int2), _coef = 0)
   end
 
-  def div(binary_decimal(1), binary_decimal(2)) when coef1 == 0 and coef2 == 0 do
+  def div(packed_decimal(1), packed_decimal(2)) when coef(int1) == 0 and coef(int2) == 0 do
     silence_unused(1); silence_unused(2)
     error(:invalid_operation, "0 / 0", not_a_number())
   end
 
-  def div(binary_decimal(1), binary_decimal(2)) when coef2 == 0 do
+  def div(packed_decimal(1), packed_decimal(2)) when coef(int2) == 0 do
     silence_unused(1); silence_unused(2)
-    sign = if sign1 == sign2, do: 1, else: 0
+    sign = if sgn(int1) == sgn(int2), do: 1, else: 0
     error(:division_by_zero, nil, infinity(sign))
   end
 
-  def div(binary_decimal(1), binary_decimal(2)) do
+  def div(packed_decimal(1), packed_decimal(2)) do
     silence_unused(1); silence_unused(2)
-    sign = if sign1 == sign2, do: 1, else: 0
+    sign = if sgn(int1) == sgn(int2), do: 1, else: 0
 
-    if coef1 == 0 do
-      context(new(sign, _nan = 0, _inf = 0, exp1 - exp2, _coef = 0), [])
+    if coef(int1) == 0 do
+      context(new(sign, _nan = 0, _inf = 0, exp(int1) - exp(int2), _coef = 0), [])
     else
       prec10 = pow10(Context.get().precision)
-      {coef1, coef2, adjust} = div_adjust(coef1, coef2, 0)
+      {coef1, coef2, adjust} = div_adjust(coef(int1), coef(int2), 0)
       {coef, adjust, _rem, signals} = div_calc(coef1, coef2, 0, adjust, prec10)
 
-      context(new(sign, _nan = 0, _inf = 0, exp1 - exp2 - adjust, coef), signals)
+      context(new(sign, _nan = 0, _inf = 0, exp(int1) - exp(int2) - adjust, coef), signals)
     end
   end
 
@@ -686,57 +691,57 @@ defmodule PackedDecimal do
 
   """
   @spec div_int(decimal, decimal) :: t
-  def div_int(binary_decimal(1) = num1, binary_decimal(2)) when nan1 == 1 do
+  def div_int(packed_decimal(1) = num1, packed_decimal(2)) when nan(int1) == 1 do
     silence_unused(1); silence_unused(2)
     num1
   end
 
-  def div_int(binary_decimal(1), binary_decimal(2) = num2) when nan2 == 1 do
+  def div_int(packed_decimal(1), packed_decimal(2) = num2) when nan(int2) == 1 do
     silence_unused(1); silence_unused(2)
     num2
   end
 
-  def div_int(binary_decimal(1), binary_decimal(2)) when inf1 == 1 and inf2 == 1 do
+  def div_int(packed_decimal(1), packed_decimal(2)) when inf(int1) == 1 and inf(int2) == 1 do
     silence_unused(1); silence_unused(2)
     error(:invalid_operation, "±Infinity / ±Infinity", not_a_number())
   end
 
-  def div_int(binary_decimal(1) = num1, binary_decimal(2)) when inf1 == 1 do
+  def div_int(packed_decimal(1) = num1, packed_decimal(2)) when inf(int1) == 1 do
     silence_unused(1); silence_unused(2)
-    sign = if sign1 == sign2, do: 1, else: 0
+    sign = if sgn(int1) == sgn(int2), do: 1, else: 0
     put_sign(num1, sign)
   end
 
-  def div_int(binary_decimal(1), binary_decimal(2)) when inf2 == 1 do
+  def div_int(packed_decimal(1), packed_decimal(2)) when inf(int2) == 1 do
     silence_unused(1); silence_unused(2)
-    sign = if sign1 == sign2, do: 1, else: 0
-    new(sign, _nan = 0, _inf = 0, exp1 - exp2, _coef = 0)
+    sign = if sgn(int1) == sgn(int2), do: 1, else: 0
+    new(sign, _nan = 0, _inf = 0, exp(int1) - exp(int2), _coef = 0)
   end
 
-  def div_int(binary_decimal(1), binary_decimal(2)) when coef1 == 0 and coef2 == 0 do
+  def div_int(packed_decimal(1), packed_decimal(2)) when coef(int1) == 0 and coef(int2) == 0 do
     silence_unused(1); silence_unused(2)
     error(:invalid_operation, "0 / 0", not_a_number())
   end
 
-  def div_int(binary_decimal(1), binary_decimal(2)) when coef2 == 0 do
+  def div_int(packed_decimal(1), packed_decimal(2)) when coef(int2) == 0 do
     silence_unused(1); silence_unused(2)
-    div_sign = if sign1 == sign2, do: 1, else: 0
+    div_sign = if sgn(int1) == sgn(int2), do: 1, else: 0
     error(:division_by_zero, nil, infinity(div_sign))
   end
 
-  def div_int(binary_decimal(1) = num1, binary_decimal(2) = num2) do
+  def div_int(packed_decimal(1) = num1, packed_decimal(2) = num2) do
     silence_unused(1); silence_unused(2)
-    div_sign = if sign1 == sign2, do: 1, else: -1
+    div_sign = if sgn(int1) == sgn(int2), do: 1, else: -1
 
     cond do
       compare(put_sign(num1, 1), put_sign(num2, 1)) == :lt ->
-        new(div_sign, _nan = 0, _inf = 0, exp1 - exp2, _coef: 0)
+        new(div_sign, _nan = 0, _inf = 0, exp(int1) - exp(int2), _coef: 0)
 
-      coef1 == 0 ->
+      coef(int1) == 0 ->
         context(put_sign(num1, div_sign))
 
       true ->
-        case integer_division(div_sign, coef1, exp1, coef2, exp2) do
+        case integer_division(div_sign, coef(int1), exp(int1), coef(int2), exp(int2)) do
           {:ok, result} ->
             result
 
@@ -767,62 +772,62 @@ defmodule PackedDecimal do
 
   """
   @spec rem(decimal, decimal) :: t
-  def rem(binary_decimal(1) = num1, binary_decimal(2)) when nan1 == 1 do
+  def rem(packed_decimal(1) = num1, packed_decimal(2)) when nan(int1) == 1 do
     silence_unused(1); silence_unused(2)
     num1
   end
 
-  def rem(binary_decimal(1), binary_decimal(2) = num2) when nan2 == 1 do
+  def rem(packed_decimal(1), packed_decimal(2) = num2) when nan(int2) == 1 do
     silence_unused(1); silence_unused(2)
     num2
   end
 
-  def rem(binary_decimal(1), binary_decimal(2)) when inf1 == 1 and inf2 == 1 do
+  def rem(packed_decimal(1), packed_decimal(2)) when inf(int1) == 1 and inf(int2) == 1 do
     silence_unused(1); silence_unused(2)
     error(:invalid_operation, "±Infinity / ±Infinity", not_a_number())
   end
 
-  def rem(binary_decimal(1), binary_decimal(2)) when inf1 == 1 do
+  def rem(packed_decimal(1), packed_decimal(2)) when inf(int1) == 1 do
     silence_unused(1); silence_unused(2)
-    new(sign1, _nan = 0, _inf = 0, _exp = 0, _coef = 0)
+    new(sgn(int1), _nan = 0, _inf = 0, _exp = 0, _coef = 0)
   end
 
-  def rem(binary_decimal(1), binary_decimal(2) = num2) when inf2 == 1 do
+  def rem(packed_decimal(1), packed_decimal(2) = num2) when inf(int2) == 1 do
     silence_unused(1); silence_unused(2)
     # TODO: Subnormal
     # exponent?
-    put_sign(num2, sign1)
+    put_sign(num2, sgn(int1))
   end
 
-  def rem(binary_decimal(1), binary_decimal(2)) when coef1 == 0 and coef2 == 0 do
+  def rem(packed_decimal(1), packed_decimal(2)) when coef(int1) == 0 and coef(int2) == 0 do
     silence_unused(1); silence_unused(2)
     error(:invalid_operation, "0 / 0", not_a_number())
   end
 
-  def rem(binary_decimal(1), binary_decimal(2)) when coef2 == 0 do
+  def rem(packed_decimal(1), packed_decimal(2)) when coef(int2) == 0 do
     silence_unused(1); silence_unused(2)
-    error(:division_by_zero, nil, new(sign1, _nan = 0, _inf = 0, _exp = 0, _coef = 0))
+    error(:division_by_zero, nil, new(sgn(int1), _nan = 0, _inf = 0, _exp = 0, _coef = 0))
   end
 
-  def rem(binary_decimal(1), binary_decimal(2)) when coef2 == 0 do
+  def rem(packed_decimal(1), packed_decimal(2)) when coef(int2) == 0 do
     silence_unused(1); silence_unused(2)
-    error(:division_by_zero, nil, new(sign1, _nan = 0, _inf = 0, _exp = 0, _coef = 0))
+    error(:division_by_zero, nil, new(sgn(int1), _nan = 0, _inf = 0, _exp = 0, _coef = 0))
   end
 
-  def rem(binary_decimal(1) = num1, binary_decimal(2) = num2) do
+  def rem(packed_decimal(1) = num1, packed_decimal(2) = num2) do
     silence_unused(1); silence_unused(2)
 
     cond do
       compare(put_sign(num1, 1), put_sign(num2, 1)) == :lt ->
         put_sign(num1, 1)
 
-      coef1 == 0 ->
-        context(put_sign(num2, sign1))
+      coef(int1) == 0 ->
+        context(put_sign(num2, sgn(int1)))
 
       true ->
-        div_sign = if sign1 == sign2, do: 1, else: -1
+        div_sign = if sgn(int1) == sgn(int2), do: 1, else: -1
 
-        case integer_division(div_sign, coef1, exp1, coef2, exp2) do
+        case integer_division(div_sign, coef(int1), exp(int1), coef(int2), exp(int2)) do
           {:ok, result} ->
             sub(num1, mult(num2, result))
 
@@ -864,7 +869,7 @@ defmodule PackedDecimal do
 #   end
 #
 #   def div_rem(%Decimal{sign: sign1, coef: :inf} = num1, %Decimal{sign: sign2}) do
-#     sign = if sign1 == sign2, do: 1, else: -1
+#     sign = if sgn(int1) == sgn(int2), do: 1, else: -1
 #     {%{num1 | sign: sign}, %Decimal{sign: sign1, coef: 0}}
 #   end
 #
@@ -872,10 +877,10 @@ defmodule PackedDecimal do
 #     %Decimal{sign: sign1, exp: exp1} = num1
 #     %Decimal{sign: sign2, exp: exp2} = num2
 #
-#     sign = if sign1 == sign2, do: 1, else: -1
+#     sign = if sgn(int1) == sgn(int2), do: 1, else: -1
 #     # TODO: Subnormal
 #     # exponent?
-#     {%Decimal{sign: sign, coef: 0, exp: exp1 - exp2}, %{num2 | sign: sign1}}
+#     {%Decimal{sign: sign, coef: 0, exp: exp(int1) - exp(int2)}, %{num2 | sign: sign1}}
 #   end
 #
 #   def div_rem(%Decimal{coef: 0}, %Decimal{coef: 0}) do
@@ -884,7 +889,7 @@ defmodule PackedDecimal do
 #   end
 #
 #   def div_rem(%Decimal{sign: sign1}, %Decimal{sign: sign2, coef: 0}) do
-#     div_sign = if sign1 == sign2, do: 1, else: -1
+#     div_sign = if sgn(int1) == sgn(int2), do: 1, else: -1
 #     div_error = error(:division_by_zero, nil, %Decimal{sign: div_sign, coef: :inf})
 #     rem_error = error(:division_by_zero, nil, %Decimal{sign: sign1, coef: 0})
 #     {div_error, rem_error}
@@ -893,17 +898,17 @@ defmodule PackedDecimal do
 #   def div_rem(%Decimal{} = num1, %Decimal{} = num2) do
 #     %Decimal{sign: sign1, coef: coef1, exp: exp1} = num1
 #     %Decimal{sign: sign2, coef: coef2, exp: exp2} = num2
-#     div_sign = if sign1 == sign2, do: 1, else: -1
+#     div_sign = if sgn(int1) == sgn(int2), do: 1, else: -1
 #
 #     cond do
 #       compare(%{num1 | sign: 1}, %{num2 | sign: 1}) == :lt ->
-#         {%Decimal{sign: div_sign, coef: 0, exp: exp1 - exp2}, %{num1 | sign: sign1}}
+#         {%Decimal{sign: div_sign, coef: 0, exp: exp(int1) - exp(int2)}, %{num1 | sign: sign1}}
 #
-#       coef1 == 0 ->
+#       coef(int1) == 0 ->
 #         {context(%{num1 | sign: div_sign}), context(%{num2 | sign: sign1})}
 #
 #       true ->
-#         case integer_division(div_sign, coef1, exp1, coef2, exp2) do
+#         case integer_division(div_sign, coef(int1), exp(int1), coef(int2), exp(int2)) do
 #           {:ok, result} ->
 #             {result, sub(num1, mult(num2, result))}
 #
@@ -950,9 +955,9 @@ defmodule PackedDecimal do
 #       :eq ->
 #         cond do
 #           sign1 != sign2 ->
-#             if sign1 == 1, do: num1, else: num2
+#             if sgn(int1) == 1, do: num1, else: num2
 #
-#           sign1 == 1 ->
+#           sgn(int1) == 1 ->
 #             if exp1 > exp2, do: num1, else: num2
 #
 #           sign1 == -1 ->
@@ -1001,7 +1006,7 @@ defmodule PackedDecimal do
 #           sign1 != sign2 ->
 #             if sign1 == -1, do: num1, else: num2
 #
-#           sign1 == 1 ->
+#           sgn(int1) == 1 ->
 #             if exp1 < exp2, do: num1, else: num2
 #
 #           sign1 == -1 ->
@@ -1029,8 +1034,8 @@ defmodule PackedDecimal do
   """
 
   @spec negate(decimal) :: t
-  def negate(binary_decimal() = num) when nan == 1, do: (silence_unused(); num)
-  def negate(binary_decimal() = num), do: (silence_unused(); context(put_sign(num, -sign)))
+  def negate(packed_decimal() = num) when nan(int) == 1, do: (silence_unused(); num)
+  def negate(packed_decimal() = num), do: (silence_unused(); context(put_sign(num, -sgn(int))))
   def negate(num), do: negate(decimal(num))
 
   @doc """
@@ -1038,27 +1043,27 @@ defmodule PackedDecimal do
   """
 
   @spec apply_context(t) :: t
-  def apply_context(binary_decimal() = num), do: (silence_unused(); context(num))
+  def apply_context(packed_decimal() = num), do: (silence_unused(); context(num))
 
   @doc """
   Check if given number is positive
   """
 
   @spec positive?(t) :: boolean
-  def positive?(binary_decimal()) when nan == 1, do: (silence_unused(); false)
-  def positive?(binary_decimal()) when coef == 0, do: (silence_unused(); false)
-  def positive?(binary_decimal()) when sign == 0, do: (silence_unused(); false)
-  def positive?(binary_decimal()) when sign == 1, do: (silence_unused(); true)
+  def positive?(packed_decimal()) when nan(int) == 1, do: (silence_unused(); false)
+  def positive?(packed_decimal()) when coef(int) == 0, do: (silence_unused(); false)
+  def positive?(packed_decimal()) when sgn(int) == 0, do: (silence_unused(); false)
+  def positive?(packed_decimal()) when sgn(int) == 1, do: (silence_unused(); true)
 
   @doc """
   Check if given number is negative
   """
 
   @spec negative?(t) :: boolean
-  def negative?(binary_decimal()) when nan == 1, do: (silence_unused(); false)
-  def negative?(binary_decimal()) when coef == 0, do: (silence_unused(); false)
-  def negative?(binary_decimal()) when sign == 1, do: (silence_unused(); false)
-  def negative?(binary_decimal()) when sign == 0, do: (silence_unused(); true)
+  def negative?(packed_decimal()) when nan(int) == 1, do: (silence_unused(); false)
+  def negative?(packed_decimal()) when coef(int) == 0, do: (silence_unused(); false)
+  def negative?(packed_decimal()) when sgn(int) == 1, do: (silence_unused(); false)
+  def negative?(packed_decimal()) when sgn(int) == 0, do: (silence_unused(); true)
 
   @doc """
   Multiplies two numbers.
@@ -1078,44 +1083,44 @@ defmodule PackedDecimal do
 
   """
   @spec mult(decimal, decimal) :: t
-  def mult(binary_decimal(1) = num1, binary_decimal(2)) when nan1 == 1 do
+  def mult(packed_decimal(1) = num1, packed_decimal(2)) when nan(int1) == 1 do
     silence_unused(1); silence_unused(2)
     num1
   end
 
-  def mult(binary_decimal(1), binary_decimal(2) = num2) when nan2 == 1 do
+  def mult(packed_decimal(1), packed_decimal(2) = num2) when nan(int2) == 1 do
     silence_unused(1); silence_unused(2)
     num2
   end
 
-  def mult(binary_decimal(1), binary_decimal(2)) when coef1 == 0 and inf2 == 1 do
+  def mult(packed_decimal(1), packed_decimal(2)) when coef(int1) == 0 and inf(int2) == 1 do
     silence_unused(1); silence_unused(2)
     error(:invalid_operation, "0 * ±Infinity", not_a_number())
   end
 
-  def mult(binary_decimal(1), binary_decimal(2)) when inf1 == 1 and coef2 == 0 do
+  def mult(packed_decimal(1), packed_decimal(2)) when inf(int1) == 1 and coef(int2) == 0 do
     silence_unused(1); silence_unused(2)
     error(:invalid_operation, "0 * ±Infinity", not_a_number())
   end
 
-  def mult(binary_decimal(1), binary_decimal(2)) when inf1 == 1 do
+  def mult(packed_decimal(1), packed_decimal(2)) when inf(int1) == 1 do
     silence_unused(1); silence_unused(2)
-    sign = if sign1 == sign2, do: 1, else: -1
+    sign = if sgn(int1) == sgn(int2), do: 1, else: -1
     # exponent?
-    new(sign, _nan = 0, _inf = 1, exp1 + exp2, _coef = 0)
+    new(sign, _nan = 0, _inf = 1, exp(int1) + exp(int2), _coef = 0)
   end
 
-  def mult(binary_decimal(1), binary_decimal(2)) when inf2 == 1 do
+  def mult(packed_decimal(1), packed_decimal(2)) when inf(int2) == 1 do
     silence_unused(1); silence_unused(2)
-    sign = if sign1 == sign2, do: 1, else: -1
+    sign = if sgn(int1) == sgn(int2), do: 1, else: -1
     # exponent?
-    new(sign, _nan = 0, _inf = 1, exp1 + exp2, _coef = 0)
+    new(sign, _nan = 0, _inf = 1, exp(int1) + exp(int2), _coef = 0)
   end
 
-  def mult(binary_decimal(1), binary_decimal(2)) do
+  def mult(packed_decimal(1), packed_decimal(2)) do
     silence_unused(1); silence_unused(2)
-    sign = if sign1 == sign2, do: 1, else: -1
-    new(sign, _nan = 0, _inf = 0, exp1 + exp2, coef1 * coef2)
+    sign = if sgn(int1) == sgn(int2), do: 1, else: -1
+    new(sign, _nan = 0, _inf = 0, exp(int1) + exp(int2), coef(int1) * coef(int2))
   end
 
   def mult(num1, num2) do
@@ -1137,26 +1142,26 @@ defmodule PackedDecimal do
   """
 
   @spec normalize(t) :: t
-  def normalize(binary_decimal() = num) when nan == 1 do
+  def normalize(packed_decimal() = num) when nan(int) == 1 do
     silence_unused()
     num
   end
 
-  def normalize(binary_decimal()) when inf == 1 do
+  def normalize(packed_decimal()) when inf(int) == 1 do
     silence_unused()
 
     # exponent?
-    new(sign, nan, inf, _exp = 0, coef)
+    new(sgn(int), nan(int), inf(int), _exp = 0, coef(int))
   end
 
-  def normalize(binary_decimal()) do
+  def normalize(packed_decimal()) do
     silence_unused()
 
-    if coef == 0 do
-      new(sign, nan, inf, _exp = 0, _coef = 0)
+    if coef(int) == 0 do
+      new(sgn(int), nan(int), inf(int), _exp = 0, _coef = 0)
     else
-      do_normalize(coef, exp)
-      |> put_sign(sign)
+      do_normalize(coef(int), exp(int))
+      |> put_sign(sgn(int))
       |> context()
     end
   end
@@ -1180,23 +1185,23 @@ defmodule PackedDecimal do
   @spec round(decimal, integer, rounding) :: t
   def round(num, places \\ 0, mode \\ :half_up)
 
-  def round(binary_decimal() = num, _, _) when nan == 1 do
+  def round(packed_decimal() = num, _, _) when nan(int) == 1 do
     silence_unused()
     num
   end
 
-  def round(binary_decimal() = num, _, _) when inf == 1 do
+  def round(packed_decimal() = num, _, _) when inf(int) == 1 do
     silence_unused()
     num
   end
 
-  def round(binary_decimal() = num, n, mode) do
+  def round(packed_decimal() = num, n, mode) do
     silence_unused()
-    binary_decimal() = normalize(num)
+    packed_decimal() = normalize(num)
     silence_unused()
-    digits = :erlang.integer_to_list(coef)
+    digits = :erlang.integer_to_list(coef(int))
     target_exp = -n
-    value = do_round(sign, digits, exp, target_exp, mode)
+    value = do_round(sgn(int), digits, exp(int), target_exp, mode)
     context(value, [])
   end
 
@@ -1215,36 +1220,36 @@ defmodule PackedDecimal do
   """
 
   @spec sqrt(decimal) :: t
-  def sqrt(binary_decimal() = num) when nan == 1 do
+  def sqrt(packed_decimal() = num) when nan(int) == 1 do
     silence_unused()
     error(:invalid_operation, "operation on NaN", num)
   end
 
-  def sqrt(binary_decimal()) when exp == 1 do
+  def sqrt(packed_decimal()) when exp(int) == 1 do
     silence_unused()
-    new(sign, nan, inf, exp >>> 1, coef)
+    new(sgn(int), nan(int), inf(int), exp(int) >>> 1, coef(int))
   end
 
-  def sqrt(binary_decimal() = num) when sign == 0 do
+  def sqrt(packed_decimal() = num) when sgn(int) == 0 do
     silence_unused()
     error(:invalid_operation, "less than zero", num)
   end
 
-  def sqrt(binary_decimal() = num) when inf == 1 do
+  def sqrt(packed_decimal() = num) when inf(int) == 1 do
     silence_unused()
     num
   end
 
-  def sqrt(binary_decimal()) do
+  def sqrt(packed_decimal()) do
     silence_unused()
     precision = Context.get().precision + 1
-    digits = :erlang.integer_to_list(coef)
+    digits = :erlang.integer_to_list(coef(int))
     num_digits = length(digits)
 
     # Since the root is calculated from integer operations only, it must be
     # large enough to contain the desired precision. Calculate the amount of
     # `shift` required (powers of 10).
-    case exp &&& 1 do
+    case exp(int) &&& 1 do
       0 ->
         # To get the desired `shift`, subtract the precision of `coef`'s square
         # root from the desired precision.
@@ -1252,13 +1257,13 @@ defmodule PackedDecimal do
         # If `coef` is 10_000, the root is 100 (3 digits of precision).
         # If `coef` is 100, the root is 10 (2 digits of precision).
         shift = precision - ((num_digits + 1) >>> 1)
-        sqrt(coef, shift, exp)
+        sqrt(coef(int), shift, exp(int))
 
       _ ->
         # If `exp` is odd, multiply `coef` by 10 and reduce shift by 1/2. `exp`
         # must be even so the root's exponent is an integer.
         shift = precision - ((num_digits >>> 1) + 1)
-        sqrt(coef * 10, shift, exp)
+        sqrt(coef(int) * 10, shift, exp(int))
     end
   end
 
@@ -1343,9 +1348,9 @@ defmodule PackedDecimal do
 
   """
   @spec new(decimal) :: t
-  def new(binary_decimal() = binary_decimal) do
+  def new(packed_decimal() = packed_decimal) do
     silence_unused()
-    binary_decimal
+    packed_decimal
   end
 
   def new(int) when is_integer(int) do
@@ -1361,14 +1366,14 @@ defmodule PackedDecimal do
 
   def new(binary) when is_binary(binary) do
     case parse(binary) do
-      {binary_decimal, ""} -> binary_decimal
+      {packed_decimal, ""} -> packed_decimal
       _ -> raise Error, reason: "number parsing syntax: #{inspect(binary)}"
     end
   end
 
   @doc false
   def new(sign, nan, inf, exp, coef) do
-    %__MODULE__{binary_decimal: pack(sign, nan, inf, exp, coef)}
+    %__MODULE__{packed_decimal: pack(sign, nan, inf, exp, coef)}
   end
 
   @doc """
@@ -1436,8 +1441,8 @@ defmodule PackedDecimal do
 
   ## Examples
 
-      iex> {:ok, binary_decimal} = PackedDecimal.cast(3)
-      iex> binary_decimal
+      iex> {:ok, packed_decimal} = PackedDecimal.cast(3)
+      iex> packed_decimal
       #PackedDecimal<3>
 
       iex> PackedDecimal.cast("bad")
@@ -1446,12 +1451,12 @@ defmodule PackedDecimal do
   """
   @spec cast(term) :: {:ok, t} | :error
   def cast(integer) when is_integer(integer), do: {:ok, new(integer)}
-  def cast(binary_decimal() = binary_decimal), do: (silence_unused(); {:ok, binary_decimal})
+  def cast(packed_decimal() = packed_decimal), do: (silence_unused(); {:ok, packed_decimal})
   def cast(float) when is_float(float), do: {:ok, from_float(float)}
 
   def cast(binary) when is_binary(binary) do
     case parse(binary) do
-      {binary_decimal, ""} -> {:ok, binary_decimal}
+      {packed_decimal, ""} -> {:ok, packed_decimal}
       _ -> :error
     end
   end
@@ -1509,20 +1514,20 @@ defmodule PackedDecimal do
   @spec to_string(t, :scientific | :normal | :xsd | :raw) :: String.t()
   def to_string(num, type \\ :scientific)
 
-  def to_string(binary_decimal(), _type) when inf == 1 do
+  def to_string(packed_decimal(), _type) when inf(int) == 1 do
     silence_unused()
-    if sign == 1, do: "Infinity", else: "-Infinity"
+    if sgn(int) == 1, do: "Infinity", else: "-Infinity"
   end
 
-  def to_string(binary_decimal(), :normal) do
+  def to_string(packed_decimal(), :normal) do
     silence_unused()
-    list = Integer.to_charlist(coef)
+    list = Integer.to_charlist(coef(int))
 
     list =
-      if exp >= 0 do
-        list ++ :lists.duplicate(exp, ?0)
+      if exp(int) >= 0 do
+        list ++ :lists.duplicate(exp(int), ?0)
       else
-        diff = length(list) + exp
+        diff = length(list) + exp(int)
 
         if diff > 0 do
           List.insert_at(list, diff, ?.)
@@ -1531,53 +1536,53 @@ defmodule PackedDecimal do
         end
       end
 
-    list = if sign == 0, do: [?- | list], else: list
+    list = if sgn(int) == 0, do: [?- | list], else: list
     IO.iodata_to_binary(list)
   end
 
-  def to_string(binary_decimal(), :scientific) do
+  def to_string(packed_decimal(), :scientific) do
     silence_unused()
-    list = Integer.to_charlist(coef)
+    list = Integer.to_charlist(coef(int))
     length = length(list)
-    adjusted = exp + length - 1
+    adjusted = exp(int) + length - 1
 
     list =
       cond do
-        exp == 0 ->
+        exp(int) == 0 ->
           list
 
-        exp < 0 and adjusted >= -6 ->
-          abs_exp = Kernel.abs(exp)
+        exp(int) < 0 and adjusted >= -6 ->
+          abs_exp = Kernel.abs(exp(int))
           diff = -length + abs_exp + 1
 
           if diff > 0 do
             list = :lists.duplicate(diff, ?0) ++ list
             List.insert_at(list, 1, ?.)
           else
-            List.insert_at(list, exp - 1, ?.)
+            List.insert_at(list, exp(int) - 1, ?.)
           end
 
         true ->
           list = if length > 1, do: List.insert_at(list, 1, ?.), else: list
           list = list ++ 'E'
-          list = if exp >= 0, do: list ++ '+', else: list
+          list = if exp(int) >= 0, do: list ++ '+', else: list
           list ++ Integer.to_charlist(adjusted)
       end
 
-    list = if sign == 0, do: [?- | list], else: list
+    list = if sgn(int) == 0, do: [?- | list], else: list
     IO.iodata_to_binary(list)
   end
 
-  def to_string(binary_decimal(), :raw) do
+  def to_string(packed_decimal(), :raw) do
     silence_unused()
-    str = Integer.to_string(coef)
-    str = if sign == 0, do: [?- | str], else: str
-    str = if exp != 0, do: [str, "E", Integer.to_string(exp)], else: str
+    str = Integer.to_string(coef(int))
+    str = if sgn(int) == 0, do: [?- | str], else: str
+    str = if exp(int) != 0, do: [str, "E", Integer.to_string(exp(int))], else: str
 
     IO.iodata_to_binary(str)
   end
 
-  # def to_string(binary_decimal() = decimal, :xsd) do
+  # def to_string(packed_decimal() = decimal, :xsd) do
   #   silence_unused()
   #   decimal |> canonical_xsd() |> to_string(:normal)
   # end
@@ -1588,7 +1593,7 @@ defmodule PackedDecimal do
   #   do: %{decimal | coef: coef * 10, exp: -1}
   #
   # defp canonical_xsd(%Decimal{coef: coef, exp: exp} = decimal)
-  #      when exp > 0,
+  #      when exp(int) > 0,
   #      do: canonical_xsd(%{decimal | coef: coef * 10, exp: exp - 1})
   #
   # defp canonical_xsd(%Decimal{coef: coef} = decimal)
@@ -1604,22 +1609,22 @@ defmodule PackedDecimal do
   Fails when loss of precision will occur.
   """
   @spec to_integer(t) :: integer
-  def to_integer(binary_decimal()) when exp == 0 and nan == 0 and inf == 0 do
-    sign(sign) * coef
+  def to_integer(packed_decimal()) when exp(int) == 0 and nan(int) == 0 and inf(int) == 0 do
+    sign(sgn(int)) * coef(int)
   end
 
-  def to_integer(binary_decimal()) when exp > 0 and nan == 0 and inf == 0 do
-    new(sign, nan, inf, exp - 1, coef * 10)
+  def to_integer(packed_decimal()) when exp(int) > 0 and nan(int) == 0 and inf(int) == 0 do
+    new(sgn(int), nan(int), inf(int), exp(int) - 1, coef(int) * 10)
     |> to_integer
   end
 
-  def to_integer(binary_decimal())
-      when exp < 0 and Kernel.rem(coef, 10) and nan == 0 and inf == 0 do
-    new(sign, nan, inf, exp + 1, Kernel.div(coef, 10))
+  def to_integer(packed_decimal())
+      when exp(int) < 0 and Kernel.rem(coef(int), 10) and nan(int) == 0 and inf(int) == 0 do
+    new(sgn(int), nan(int), inf(int), exp(int) + 1, Kernel.div(coef(int), 10))
     |> to_integer
   end
 
-  def to_integer(binary_decimal() = decimal) when is_integer(coef) do
+  def to_integer(packed_decimal() = decimal) do
     silence_unused()
     raise ArgumentError,
           "cannot convert #{inspect(decimal)} without losing precision. Use Decimal.round/3 first."
@@ -1632,10 +1637,10 @@ defmodule PackedDecimal do
   the decimal cannot be converted to a float.
   """
   @spec to_float(t) :: float
-  def to_float(binary_decimal()) when nan == 0 and inf == 0 do
+  def to_float(packed_decimal()) when nan(int) == 0 and inf(int) == 0 do
     # Convert back to float without loss
     # http://www.exploringbinary.com/correct-decimal-to-floating-point-using-big-integers/
-    {num, den} = ratio(coef, exp)
+    {num, den} = ratio(coef(int), exp(int))
 
     boundary = den <<< 52
 
@@ -1645,11 +1650,11 @@ defmodule PackedDecimal do
 
       num >= boundary ->
         {den, exp} = scale_down(num, boundary, 52)
-        decimal_to_float(sign, num, den, exp)
+        decimal_to_float(sgn(int), num, den, exp)
 
       true ->
         {num, exp} = scale_up(num, boundary, 52)
-        decimal_to_float(sign, num, den, exp)
+        decimal_to_float(sgn(int), num, den, exp)
     end
   end
 
@@ -1698,10 +1703,14 @@ defmodule PackedDecimal do
   """
 
   @spec integer?(decimal()) :: boolean
-  def integer?(binary_decimal()) when nan == 1, do: (silence_unused(); false)
-  def integer?(binary_decimal()) when inf == 1, do: (silence_unused(); false)
-  def integer?(binary_decimal()), do: (silence_unused(); exp >= 0 or zero_after_dot?(coef, exp))
-  def integer?(num), do: integer?(decimal(num))
+  def integer?(packed_decimal()) when nan(int) == 1,
+    do: (silence_unused(); false)
+  def integer?(packed_decimal()) when inf(int) == 1,
+    do: (silence_unused(); false)
+  def integer?(packed_decimal()),
+    do: (silence_unused(); exp(int) >= 0 or zero_after_dot?(coef(int), exp(int)))
+  def integer?(num),
+    do: integer?(decimal(num))
 
   defp zero_after_dot?(coef, exp) when coef >= 10 and exp < 0,
     do: Kernel.rem(coef, 10) == 0 and zero_after_dot?(Kernel.div(coef, 10), exp + 1)
@@ -1862,23 +1871,23 @@ defmodule PackedDecimal do
   defp digits_to_integer([]), do: 0
   defp digits_to_integer(digits), do: :erlang.list_to_integer(digits)
 
-  defp precision(binary_decimal() = num, _precision, _rounding) when nan == 1 do
+  defp precision(packed_decimal() = num, _precision, _rounding) when nan(int) == 1 do
     silence_unused()
     {num, []}
   end
 
-  defp precision(binary_decimal() = num, _precision, _rounding) when inf == 1 do
+  defp precision(packed_decimal() = num, _precision, _rounding) when inf(int) == 1 do
     silence_unused()
     {num, []}
   end
 
-  defp precision(binary_decimal() = num, precision, rounding) do
+  defp precision(packed_decimal() = num, precision, rounding) do
     silence_unused()
-    digits = :erlang.integer_to_list(coef)
+    digits = :erlang.integer_to_list(coef(int))
     num_digits = length(digits)
 
     if num_digits > precision do
-      do_precision(sign, digits, num_digits, exp, precision, rounding)
+      do_precision(sgn(int), digits, num_digits, exp(int), precision, rounding)
     else
       {num, []}
     end
@@ -1930,8 +1939,8 @@ defmodule PackedDecimal do
   defp digits_increment([head | rest], acc), do: :lists.reverse(rest, [head + 1 | acc])
 
   defp digits_increment([], acc), do: [?1 | acc]
-#
-#   ## CONTEXT ##
+
+  ## CONTEXT ##
 
   defp context(num, signals \\ []) do
     context = Context.get()
@@ -2065,21 +2074,21 @@ defmodule PackedDecimal do
     put_sign(num, sign)
   end
 
-  defp put_sign(binary_decimal(), sign) do
+  defp put_sign(packed_decimal(), sign) do
     silence_unused()
     sign = if(sign <= 0, do: 0, else: 1)
-    new(sign, _nan = 0, _inf = 0, exp, coef)
+    new(sign, _nan = 0, _inf = 0, exp(int), coef(int))
   end
 end
 
-defimpl Inspect, for: IntegerDecimal do
+defimpl Inspect, for: PackedDecimal do
   def inspect(dec, _opts) do
-    "#PackedDecimal<" <> IntegerDecimal.to_string(dec) <> ">"
+    "#PackedDecimal<" <> PackedDecimal.to_string(dec) <> ">"
   end
 end
 
-defimpl String.Chars, for: IntegerDecimal do
+defimpl String.Chars, for: PackedDecimal do
   def to_string(dec) do
-    IntegerDecimal.to_string(dec)
+    PackedDecimal.to_string(dec)
   end
 end

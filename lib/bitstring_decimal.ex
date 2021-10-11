@@ -1,4 +1,4 @@
-defmodule BinaryDecimal do
+defmodule BitstringDecimal do
   @moduledoc """
   Decimal arithmetic on *fixed* precision floating-point numbers.
 
@@ -2016,14 +2016,14 @@ defmodule BinaryDecimal do
   end
 end
 
-defimpl Inspect, for: BinaryDecimal do
+defimpl Inspect, for: BitstringDecimal do
   def inspect(dec, _opts) do
-    "#PackedDecimal<" <> BinaryDecimal.to_string(dec) <> ">"
+    "#BitstringDecimal<" <> BitstringDecimal.to_string(dec) <> ">"
   end
 end
 
-defimpl String.Chars, for: PackedDecimal do
+defimpl String.Chars, for: BitstringDecimal do
   def to_string(dec) do
-    BinaryDecimal.to_string(dec)
+    BitstringDecimal.to_string(dec)
   end
 end

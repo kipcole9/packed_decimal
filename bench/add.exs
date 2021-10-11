@@ -1,10 +1,8 @@
-decimal = Decimal.new(10)
-packed_decimal = PackedDecimal.new(10)
-
 Benchee.run(
   %{
-    "Decimal" => fn -> Decimal.add(decimal, decimal) end,
-    "Packed Decimal" => fn -> PackedDecimal.add(packed_decimal, packed_decimal) end,
+    "Decimal" => fn -> Decimal.add(100, 200) end,
+    "Packed Decimal" => fn -> PackedDecimal.add(100, 200) end,
+    "Bitstring Decimal" => fn -> BitstringDecimal.add(100, 200) end,
   },
   time: 10,
   memory_time: 2
